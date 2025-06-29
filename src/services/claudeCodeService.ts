@@ -43,27 +43,17 @@ export class ClaudeCodeService {
             await this.setupWorkingDirectory();
             this.outputChannel.appendLine('setupWorkingDirectory() completed');
 
-            // Check if API key is configured
-            this.outputChannel.appendLine('Checking API key configuration...');
+            // Check if API key is configured in extension settings
             const config = vscode.workspace.getConfiguration('superdesign');
             const apiKey = config.get<string>('anthropicApiKey');
-            this.outputChannel.appendLine(`API key configured: ${!!apiKey}`);
             
-            if (!apiKey) {
-                this.outputChannel.appendLine('No API key found, showing error message');
-                const action = await vscode.window.showErrorMessage(
-                    'Anthropic API key is required for Claude Code integration.',
-                    'Open Settings'
-                );
-                if (action === 'Open Settings') {
-                    vscode.commands.executeCommand('workbench.action.openSettings', 'superdesign.anthropicApiKey');
-                }
-                throw new Error('Missing API key');
+            // Only set environment variable if we have an API key from settings
+            if (apiKey) {
+                this.outputChannel.appendLine('Using API key from extension settings');
+                process.env.ANTHROPIC_API_KEY = apiKey;
+            } else {
+                this.outputChannel.appendLine('No API key configured - Claude Code SDK will handle authentication');
             }
-
-            // Set the environment variable for Claude Code SDK
-            this.outputChannel.appendLine('Setting environment variable for Claude Code SDK');
-            process.env.ANTHROPIC_API_KEY = apiKey;
 
                         // Dynamically import Claude Code SDK
             this.outputChannel.appendLine('Dynamically importing Claude Code SDK...');
@@ -139,6 +129,7 @@ export class ClaudeCodeService {
             throw error;
         }
     }
+
 
     private async setupWorkingDirectory(): Promise<void> {
         try {
