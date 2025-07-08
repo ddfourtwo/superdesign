@@ -1,17 +1,41 @@
 import * as vscode from 'vscode';
 import { ClaudeCodeService } from './claudeCodeService';
+import { AgentService } from '../types/agent';
+import { CoreMessage } from 'ai';
+import { Logger } from './logger';
 
 export class ChatMessageService {
     private currentRequestController?: AbortController;
 
     constructor(
-        private claudeService: ClaudeCodeService,
+        private agentService: AgentService,
         private outputChannel: vscode.OutputChannel
     ) {}
 
     async handleChatMessage(message: any, webview: vscode.Webview): Promise<void> {
         try {
-            this.outputChannel.appendLine(`Chat message received: ${message.message}`);
+            const chatHistory: CoreMessage[] = message.chatHistory || [];
+            const latestMessage = message.message || '';
+            const messageContent = message.messageContent || latestMessage;
+            
+            console.log('========chatHistory', chatHistory);
+
+            Logger.info(`Chat message received with ${chatHistory.length} history messages`);
+            Logger.info(`Latest message: ${latestMessage}`);
+            
+            // Debug structured content
+            if (typeof messageContent !== 'string' && Array.isArray(messageContent)) {
+                Logger.info(`Structured content: ${messageContent.length} parts`);
+                messageContent.forEach((part, index) => {
+                    if (part.type === 'text') {
+                        Logger.info(`  [${index}] text: "${part.text?.substring(0, 100)}..."`);
+                    } else if (part.type === 'image') {
+                        Logger.info(`  [${index}] image: ${part.mimeType || 'unknown type'} (${part.image?.length || 0} chars)`);
+                    }
+                });
+            } else {
+                Logger.info(`Simple text content: ${String(messageContent).substring(0, 100)}...`);
+            }
             
             // Create new AbortController for this request
             this.currentRequestController = new AbortController();
@@ -21,24 +45,65 @@ export class ChatMessageService {
                 command: 'chatStreamStart'
             });
             
-            // Use the enhanced file tools method with streaming callback
-            const response = await this.claudeService.query(
-                message.message, 
-                undefined, 
-                this.currentRequestController,
-                (streamMessage) => {
-                    // Process and send each message as it arrives
-                    this.handleStreamMessage(streamMessage, webview);
-                }
-            );
+            // Debug log chat history with VS Code output channel
+            this.outputChannel.appendLine('=== CHAT HISTORY DEBUG ===');
+            this.outputChannel.appendLine(`📥 Input: ${chatHistory.length} CoreMessage messages`);
+            
+            // Log each message
+            this.outputChannel.appendLine('📋 Chat history:');
+            chatHistory.forEach((msg, index) => {
+                const content = typeof msg.content === 'string' ? msg.content : 
+                    Array.isArray(msg.content) ? 
+                        msg.content.map(part => 
+                            part.type === 'text' ? part.text?.substring(0, 50) + '...' :
+                            part.type === 'tool-call' ? `[tool-call: ${part.toolName}]` :
+                            part.type === 'tool-result' ? `[tool-result: ${part.toolName}]` :
+                            `[${part.type}]`
+                        ).join(', ') :
+                        '[complex content]';
+                        
+                this.outputChannel.appendLine(`  [${index}] ${msg.role}: "${content.substring(0, 100)}..."`);
+            });
+            
+            this.outputChannel.appendLine('=== END CHAT HISTORY DEBUG ===');
+            
+            // Use conversation history or single prompt
+            let response: any[];
+            if (chatHistory.length > 0) {
+                // Use conversation history - CoreMessage format is already compatible
+                this.outputChannel.appendLine(`Using conversation history with ${chatHistory.length} messages`);
+                response = await this.agentService.query(
+                    undefined, // no prompt 
+                    chatHistory, // use CoreMessage array directly
+                    undefined, 
+                    this.currentRequestController,
+                    (streamMessage: any) => {
+                        // Process and send each message as it arrives
+                        this.handleStreamMessage(streamMessage, webview);
+                    }
+                );
+            } else {
+                // Fallback to single prompt for first message
+                this.outputChannel.appendLine('No conversation history, using single prompt');
+                response = await this.agentService.query(
+                    latestMessage, // use latest message as prompt
+                    undefined, // no messages array
+                    undefined, 
+                    this.currentRequestController,
+                    (streamMessage: any) => {
+                        // Process and send each message as it arrives
+                        this.handleStreamMessage(streamMessage, webview);
+                    }
+                );
+            }
 
             // Check if request was aborted
             if (this.currentRequestController.signal.aborted) {
-                this.outputChannel.appendLine('Request was aborted');
+                Logger.warn('Request was aborted');
                 return;
             }
 
-            this.outputChannel.appendLine(`Claude response completed with ${response.length} total messages`);
+            Logger.info(`Agent response completed with ${response.length} total messages`);
 
             // Send stream end message
             webview.postMessage({
@@ -48,220 +113,208 @@ export class ChatMessageService {
         } catch (error) {
             // Check if the error is due to abort
             if (this.currentRequestController?.signal.aborted) {
-                this.outputChannel.appendLine('Request was stopped by user');
+                Logger.info('Request was stopped by user');
                 webview.postMessage({
                     command: 'chatStopped'
                 });
                 return;
             }
 
-            this.outputChannel.appendLine(`Chat message failed: ${error}`);
-            vscode.window.showErrorMessage(`Chat failed: ${error}`);
+            Logger.error(`Chat message failed: ${error}`);
+            Logger.error(`Error type: ${typeof error}, constructor: ${error?.constructor?.name}`);
             
-            // Send error response back to webview
-            webview.postMessage({
-                command: 'chatError',
-                error: error instanceof Error ? error.message : String(error)
-            });
+            // Check if this is an API key authentication error or process failure
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            Logger.error(`Processing error message: "${errorMessage}"`);
+            if (this.agentService.isApiKeyAuthError(errorMessage) || !this.agentService.hasApiKey()) {
+                // Determine which provider is currently selected to show specific error
+                const config = vscode.workspace.getConfiguration('superdesign');
+                const specificModel = config.get<string>('aiModel');
+                const provider = config.get<string>('aiModelProvider', 'anthropic');
+                
+                // Determine provider from model name if specific model is set
+                let effectiveProvider = provider;
+                let providerName = 'AI';
+                let configureCommand = 'superdesign.configureApiKey';
+                
+                if (specificModel) {
+                    if (specificModel.includes('/')) {
+                        effectiveProvider = 'openrouter';
+                    } else if (specificModel.startsWith('claude-')) {
+                        effectiveProvider = 'anthropic';
+                    } else {
+                        effectiveProvider = 'openai';
+                    }
+                }
+                
+                switch (effectiveProvider) {
+                    case 'openrouter':
+                        providerName = 'OpenRouter';
+                        configureCommand = 'superdesign.configureOpenRouterApiKey';
+                        break;
+                    case 'anthropic':
+                        providerName = 'Anthropic';
+                        configureCommand = 'superdesign.configureApiKey';
+                        break;
+                    case 'openai':
+                        providerName = 'OpenAI';
+                        configureCommand = 'superdesign.configureOpenAIApiKey';
+                        break;
+                }
+                
+                const hasApiKey = this.agentService.hasApiKey();
+                const displayMessage = hasApiKey ? 
+                    `Invalid ${providerName} API key. Please check your configuration.` : 
+                    `${providerName} API key not configured. Please set up your API key to use this AI model.`;
+                    
+                webview.postMessage({
+                    command: 'chatErrorWithActions',
+                    error: displayMessage,
+                    actions: [
+                        { text: `Configure ${providerName} API Key`, command: configureCommand },
+                        { text: 'Open Settings', command: 'workbench.action.openSettings', args: '@ext:iganbold.superdesign' }
+                    ]
+                });
+            } else {
+                // Regular error - show standard error message
+                vscode.window.showErrorMessage(`Chat failed: ${error}`);
+                webview.postMessage({
+                    command: 'chatError',
+                    error: errorMessage
+                });
+            }
         } finally {
             // Clear the controller when done
             this.currentRequestController = undefined;
         }
     }
 
-    private handleStreamMessage(message: any, webview: vscode.Webview): void {
-        const subtype = 'subtype' in message ? message.subtype : undefined;
-        this.outputChannel.appendLine(`Processing stream message type: ${message.type}${subtype ? `, subtype: ${subtype}` : ''}`);
-        this.outputChannel.appendLine(`Full message structure: ${JSON.stringify(message, null, 2)}`);
+    private handleStreamMessage(message: CoreMessage, webview: vscode.Webview): void {
+        Logger.debug(`Handling CoreMessage: ${JSON.stringify(message, null, 2)}`);
         
-        // Skip system messages
-        if (message.type === 'system') {
-            this.outputChannel.appendLine('Skipping system message');
-            return;
-        }
-        
-        // Handle user messages (which can contain tool results)
-        if (message.type === 'user' && message.message) {
-            this.outputChannel.appendLine(`User message structure: ${JSON.stringify(message.message, null, 2)}`);
-            
-            if (typeof message.message === 'string') {
-                const content = message.message;
-                this.outputChannel.appendLine(`Extracted user content: "${content}"`);
-                
-                if (content.trim()) {
-                    webview.postMessage({
-                        command: 'chatResponseChunk',
-                        messageType: 'user',
-                        content: content,
-                        subtype: subtype,
-                        metadata: {
-                            session_id: message.session_id,
-                            parent_tool_use_id: message.parent_tool_use_id
-                        }
-                    });
-                }
-            } else if (message.message.content && Array.isArray(message.message.content)) {
-                // Handle tool results within user messages
-                for (const item of message.message.content) {
-                    if (item.type === 'tool_result' && item.tool_use_id) {
-                        // This is a tool result - send it as an update to the corresponding tool
-                        const resultContent = typeof item.content === 'string' ? item.content : JSON.stringify(item.content);
-                        
-                        this.outputChannel.appendLine(`Tool result for ${item.tool_use_id}: "${resultContent.substring(0, 200)}..."`);
-                        
-                        webview.postMessage({
-                            command: 'chatToolResult',
-                            tool_use_id: item.tool_use_id,
-                            content: resultContent,
-                            is_error: item.is_error || false,
-                            metadata: {
-                                session_id: message.session_id,
-                                parent_tool_use_id: message.parent_tool_use_id
-                            }
-                        });
-                    } else if (item.type === 'text' && item.text) {
-                        // Regular text content in user message
-                        webview.postMessage({
-                            command: 'chatResponseChunk',
-                            messageType: 'user',
-                            content: item.text,
-                            subtype: subtype,
-                            metadata: {
-                                session_id: message.session_id,
-                                parent_tool_use_id: message.parent_tool_use_id
-                            }
-                        });
-                    }
-                }
-            } else if (message.message.content && typeof message.message.content === 'string') {
-                const content = message.message.content;
-                this.outputChannel.appendLine(`Extracted user content: "${content}"`);
-                
-                if (content.trim()) {
-                    webview.postMessage({
-                        command: 'chatResponseChunk',
-                        messageType: 'user',
-                        content: content,
-                        subtype: subtype,
-                        metadata: {
-                            session_id: message.session_id,
-                            parent_tool_use_id: message.parent_tool_use_id
-                        }
-                    });
-                }
-            } else if (message.message.text) {
-                const content = message.message.text;
-                this.outputChannel.appendLine(`Extracted user content: "${content}"`);
-                
-                if (content.trim()) {
-                    webview.postMessage({
-                        command: 'chatResponseChunk',
-                        messageType: 'user',
-                        content: content,
-                        subtype: subtype,
-                        metadata: {
-                            session_id: message.session_id,
-                            parent_tool_use_id: message.parent_tool_use_id
-                        }
-                    });
-                }
-            } else {
-                this.outputChannel.appendLine('No content found in user message');
-            }
-        }
+        // Check if this is an update to existing message
+        const isUpdate = (message as any)._isUpdate;
+        const updateToolId = (message as any)._updateToolId;
         
         // Handle assistant messages
-        if (message.type === 'assistant' && message.message) {
-            this.outputChannel.appendLine(`Assistant message structure: ${JSON.stringify(message.message, null, 2)}`);
-            
-            if (typeof message.message === 'string') {
-                const content = message.message;
-                this.outputChannel.appendLine(`Extracted assistant content: "${content}"`);
-                
-                if (content.trim()) {
+        if (message.role === 'assistant') {
+            if (typeof message.content === 'string') {
+                // Simple text content
+                if (message.content.trim()) {
                     webview.postMessage({
                         command: 'chatResponseChunk',
                         messageType: 'assistant',
-                        content: content,
-                        subtype: subtype,
-                        metadata: {
-                            session_id: message.session_id,
-                            parent_tool_use_id: message.parent_tool_use_id
-                        }
+                        content: message.content,
+                        metadata: {}
                     });
                 }
-            } else if (message.message.content && Array.isArray(message.message.content)) {
-                // Handle each content item separately
-                for (const item of message.message.content) {
-                    if (item.type === 'text' && item.text) {
-                        // Send text content as assistant message
+            } else if (Array.isArray(message.content)) {
+                // Handle assistant content array (text parts, tool calls, etc.)
+                for (const part of message.content) {
+                    if (part.type === 'text' && (part as any).text) {
+                        // Send text content
                         webview.postMessage({
                             command: 'chatResponseChunk',
                             messageType: 'assistant',
-                            content: item.text,
-                            subtype: subtype,
-                            metadata: {
-                                session_id: message.session_id,
-                                parent_tool_use_id: message.parent_tool_use_id
-                            }
+                            content: (part as any).text,
+                            metadata: {}
                         });
-                    } else if (item.type === 'tool_use') {
-                        // Send each tool use as a separate tool message
-                        webview.postMessage({
-                            command: 'chatResponseChunk',
-                            messageType: 'tool',
-                            content: '',
-                            subtype: 'tool_use',
-                            metadata: {
-                                session_id: message.session_id,
-                                parent_tool_use_id: message.parent_tool_use_id,
-                                tool_name: item.name || 'Unknown Tool',
-                                tool_id: item.id,
-                                tool_input: item.input || {}
-                            }
-                        });
+                    } else if (part.type === 'tool-call') {
+                        // Send tool call or update
+                        const toolPart = part as any;
+                        const command = isUpdate ? 'chatToolUpdate' : 'chatResponseChunk';
+                        const messageType = isUpdate ? undefined : 'tool-call';
+                        
+                        if (isUpdate) {
+                            // Send tool parameter update
+                            webview.postMessage({
+                                command: 'chatToolUpdate',
+                                tool_use_id: toolPart.toolCallId,
+                                tool_input: toolPart.args
+                            });
+                        } else {
+                            // Send new tool call message
+                            webview.postMessage({
+                                command: 'chatResponseChunk',
+                                messageType: 'tool-call',
+                                content: '',
+                                metadata: {
+                                    tool_name: toolPart.toolName,
+                                    tool_id: toolPart.toolCallId,
+                                    tool_input: toolPart.args
+                                }
+                            });
+                        }
                     }
                 }
-            } else if (message.message.content && typeof message.message.content === 'string') {
-                const content = message.message.content;
-                this.outputChannel.appendLine(`Extracted assistant content: "${content}"`);
-                
-                if (content.trim()) {
-                    webview.postMessage({
-                        command: 'chatResponseChunk',
-                        messageType: 'assistant',
-                        content: content,
-                        subtype: subtype,
-                        metadata: {
-                            session_id: message.session_id,
-                            parent_tool_use_id: message.parent_tool_use_id
-                        }
-                    });
-                }
-            } else if (message.message.text) {
-                const content = message.message.text;
-                this.outputChannel.appendLine(`Extracted assistant content: "${content}"`);
-                
-                if (content.trim()) {
-                    webview.postMessage({
-                        command: 'chatResponseChunk',
-                        messageType: 'assistant',
-                        content: content,
-                        subtype: subtype,
-                        metadata: {
-                            session_id: message.session_id,
-                            parent_tool_use_id: message.parent_tool_use_id
-                        }
-                    });
-                }
-            } else {
-                this.outputChannel.appendLine('No content found in assistant message');
             }
         }
         
-        // Handle result messages (tool results)
+        // Handle tool messages (CoreToolMessage)
+        if (message.role === 'tool' && Array.isArray(message.content)) {
+            for (const toolResultPart of message.content) {
+                if (toolResultPart.type === 'tool-result') {
+                    const part = toolResultPart as any;
+                    const content = typeof part.result === 'string' ? 
+                        part.result : 
+                        JSON.stringify(part.result, null, 2);
+                    
+                    Logger.debug(`Tool result for ${part.toolCallId}: "${content.substring(0, 200)}..."`);
+                    
+                    // Send tool result to frontend
+                    webview.postMessage({
+                        command: 'chatResponseChunk',
+                        messageType: 'tool-result',
+                        content: content,
+                        metadata: {
+                            tool_id: part.toolCallId,
+                            tool_name: part.toolName,
+                            is_error: part.isError || false
+                        }
+                    });
+                    
+                    // Also send completion signal
+                    webview.postMessage({
+                        command: 'chatToolResult',
+                        tool_use_id: part.toolCallId,
+                        content: content,
+                        is_error: part.isError || false
+                    });
+                }
+            }
+        }
+        
+        // Handle user messages
+        if (message.role === 'user') {
+            if (typeof message.content === 'string' && message.content.trim()) {
+                webview.postMessage({
+                    command: 'chatResponseChunk',
+                    messageType: 'user',
+                    content: message.content,
+                    metadata: {}
+                });
+            }
+        }
+        
+        // Skip other message types (system, etc.)
+    }
+
+    // Legacy handler for backward compatibility
+    private handleLegacyResultMessage(message: any, webview: vscode.Webview): void {
         if (message.type === 'result') {
-            this.outputChannel.appendLine(`Result message structure: ${JSON.stringify(message, null, 2)}`);
+            Logger.debug(`Result message structure: ${JSON.stringify(message, null, 2)}`);
+            
+            // Skip error result messages that contain raw API key errors - these are handled by our custom error handler
+            if (message.is_error) {
+                // Check if this is an API key related error in any field
+                const messageStr = JSON.stringify(message).toLowerCase();
+                if (messageStr.includes('api key') || messageStr.includes('authentication') || 
+                    messageStr.includes('unauthorized') || messageStr.includes('anthropic') ||
+                    messageStr.includes('process exited') || messageStr.includes('exit code')) {
+                    Logger.debug('Skipping raw API key error result message - handled by custom error handler');
+                    return;
+                }
+            }
             
             // Skip final success result messages that are just summaries
             if (message.subtype === 'success' && message.result && typeof message.result === 'string') {
@@ -269,7 +322,7 @@ export class ChatMessageService {
                 // Skip if it looks like a final summary (contains phrases like "successfully created", "perfect", etc.)
                 if (resultText.includes('successfully') || resultText.includes('perfect') || 
                     resultText.includes('created') || resultText.includes('variations')) {
-                    this.outputChannel.appendLine('Skipping final summary result message');
+                    Logger.debug('Skipping final summary result message');
                     return;
                 }
             }
@@ -284,8 +337,12 @@ export class ChatMessageService {
                 content = typeof message.content === 'string' ? message.content : JSON.stringify(message.content);
             } else if (message.text) {
                 content = message.text;
+            } else if (message.result && typeof message.result === 'string') {
+                content = message.result;
             } else {
-                content = JSON.stringify(message);
+                // Skip messages that would result in raw JSON dump
+                Logger.debug('Skipping result message with no readable content');
+                return;
             }
             
             // Determine result type and error status
@@ -298,14 +355,13 @@ export class ChatMessageService {
                 }
             }
             
-            this.outputChannel.appendLine(`Extracted result content: "${content.substring(0, 200)}..."`);
+            Logger.debug(`Extracted result content: "${content.substring(0, 200)}..."`);
             
             if (content.trim()) {
                 webview.postMessage({
                     command: 'chatResponseChunk',
                     messageType: 'tool-result',
                     content: content,
-                    subtype: subtype,
                     metadata: {
                         session_id: message.session_id,
                         parent_tool_use_id: message.parent_tool_use_id,
@@ -320,13 +376,13 @@ export class ChatMessageService {
         
         // Log tool activity
         if ((message.type === 'assistant' || message.type === 'user') && ('subtype' in message) && (message.subtype === 'tool_use' || message.subtype === 'tool_result')) {
-            this.outputChannel.appendLine(`Tool activity detected: ${message.subtype}`);
+            Logger.debug(`Tool activity detected: ${message.subtype}`);
         }
     }
 
     async stopCurrentChat(webview: vscode.Webview): Promise<void> {
         if (this.currentRequestController) {
-            this.outputChannel.appendLine('Stopping current chat request');
+            Logger.info('Stopping current chat request');
             this.currentRequestController.abort();
             
             // Send stopped message back to webview
@@ -334,7 +390,7 @@ export class ChatMessageService {
                 command: 'chatStopped'
             });
         } else {
-            this.outputChannel.appendLine('No active chat request to stop');
+            Logger.info('No active chat request to stop');
         }
     }
 
@@ -345,7 +401,7 @@ export class ChatMessageService {
         
         for (const msg of response) {
             const subtype = 'subtype' in msg ? msg.subtype : undefined;
-            this.outputChannel.appendLine(`Processing message type: ${msg.type}${subtype ? `, subtype: ${subtype}` : ''}`);
+            Logger.debug(`Processing message type: ${msg.type}${subtype ? `, subtype: ${subtype}` : ''}`);
             
             // Collect assistant messages
             if (msg.type === 'assistant' && msg.message) {
@@ -375,7 +431,7 @@ export class ChatMessageService {
             
             // Handle tool usage messages
             if ((msg.type === 'assistant' || msg.type === 'user') && ('subtype' in msg) && (msg.subtype === 'tool_use' || msg.subtype === 'tool_result')) {
-                this.outputChannel.appendLine(`Tool activity detected: ${msg.subtype}`);
+                Logger.debug(`Tool activity detected: ${msg.subtype}`);
             }
         }
 

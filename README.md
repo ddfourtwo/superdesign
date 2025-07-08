@@ -1,5 +1,7 @@
 # 🧠 SuperDesign — AI Design Agent for Your IDE
 
+![SuperDesign Cover](cover.png)
+
 ### **By:** [AI Jason](https://x.com/jasonzhou1993) & [JackJack](https://x.com/jackjack_eth)
 
 SuperDesign is the first **open-source design agent** that lives right inside your IDE.  
@@ -16,6 +18,12 @@ Works seamlessly with Cursor, Windsurf, Claude Code, and plain VS Code.
 
 ---
 
+## 🎬 Demo Video (Click to play)
+
+[![SuperDesign Demo](https://img.youtube.com/vi/INv6oZDhhUM/maxresdefault.jpg)](https://youtu.be/INv6oZDhhUM)
+
+---
+
 ## 🚀 Features
 
 - 🖼️ **Product Mock**: Instantly generate full UI screens from a single prompt
@@ -26,13 +34,7 @@ Works seamlessly with Cursor, Windsurf, Claude Code, and plain VS Code.
 
 ---
 
-## 🧠 Works Great With
-
-- [Cursor](https://marketplace.visualstudio.com/items?itemName=iganbold.superdesign)
-- [Windsurf](https://marketplace.visualstudio.com/items?itemName=iganbold.superdesign)
-- [Claude Code](https://marketplace.visualstudio.com/items?itemName=iganbold.superdesign)
-- [Visual Studio Code](https://marketplace.visualstudio.com/items?itemName=iganbold.superdesign)
-
+## 🧠 Works Great With Cursor, Windsurf, Claude Code, VS Code
 
 👉 [Install here](https://www.superdesign.dev/)
 
@@ -48,6 +50,14 @@ Works seamlessly with Cursor, Windsurf, Claude Code, and plain VS Code.
 
 ---
 
+## Can I use my own Claude Code or Cursor subscription?
+Yes, after you initialise superdesign extension, some cursor/claude code rules will be added, so you can prompt the agent to do design and preview in superdesign canva (cmd + shift + p -> superdesign: open canva)
+
+If using Cursor - I will highly suggest copy the prompt in 'design.mdc' and create a custom mode in cursor with that same system prompt; This should give you much better performance
+
+Instructions here (Click to play): 
+[![Instruction video](v0.0.11.png)](https://youtu.be/KChmJMCDOB0?si=pvU0kNRO4GRWjsec&t=122)
+
 ## 📂 Where Are My Designs Stored?
 
 Your generated designs are saved locally inside `.superdesign/`.
@@ -57,7 +67,7 @@ Your generated designs are saved locally inside `.superdesign/`.
 ## ❓ FAQ
 
 **Is it free and open source?**  
-Yes! Licensed under MIT — fork it, extend it, remix it.
+Yes! We are open source — fork it, extend it, remix it.
 
 **Can I customize the design agent?**  
 Yes — use your own prompt templates, modify behaviors, or add commands.
@@ -77,8 +87,3 @@ Pull requests are welcome. Star the repo and join us on [Discord](https://discor
 - 💬 Discord: [Join the Community](https://discord.gg/XYZ)
 - 🐦 Twitter / X: [@SuperDesignDev](https://x.com/SuperDesignDev)
 
----
-
-## 🪪 License
-
-MIT — Built with ❤️ by the SuperDesign team

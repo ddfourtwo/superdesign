@@ -17,7 +17,9 @@ import {
   AlertTriangle,
   CheckSquare,
   List,
-  Link
+  Link,
+  Settings,
+  Brain
 } from 'lucide-react';
 
 const iconStyle: React.CSSProperties = {
@@ -30,12 +32,18 @@ const toolIconStyle: React.CSSProperties = {
     height: '14px',
 };
 
+const selectorIconStyle: React.CSSProperties = {
+    width: '12px',
+    height: '12px',
+};
+
 // Canvas Control Icons
 export const ZoomInIcon = () => <ZoomIn style={iconStyle} />;
 export const ZoomOutIcon = () => <ZoomOut style={iconStyle} />;
 export const HomeIcon = () => <Home style={iconStyle} />;
 export const ScaleIcon = () => <Maximize2 style={iconStyle} />;
 export const RefreshIcon = () => <RotateCcw style={iconStyle} />;
+export const SettingsIcon = () => <Settings style={iconStyle} />;
 
 // Viewport Icons
 export const GlobeIcon = () => <Globe style={iconStyle} />;
@@ -55,3 +63,6 @@ export const LightBulbIcon = () => <Lightbulb style={toolIconStyle} />;
 export const GroupIcon = () => <Folder style={toolIconStyle} />;
 export const WarningIcon = () => <AlertTriangle style={toolIconStyle} />;
 export const TaskIcon = () => <CheckSquare style={toolIconStyle} />;
+
+// Selector Icons (smallest size)
+export const BrainIcon = () => <Brain style={selectorIconStyle} />;

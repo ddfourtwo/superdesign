@@ -1,10 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useChat, ChatMessage } from '../../hooks/useChat';
 import { useFirstTimeUser } from '../../hooks/useFirstTimeUser';
 import { WebviewLayout } from '../../../types/context';
 import MarkdownRenderer from '../MarkdownRenderer';
-import { TaskIcon, ClockIcon, CheckIcon, LightBulbIcon, GroupIcon } from '../Icons';
+import { TaskIcon, ClockIcon, CheckIcon, LightBulbIcon, GroupIcon, BrainIcon } from '../Icons';
 import Welcome from '../Welcome';
+import ThemePreviewCard from './ThemePreviewCard';
+import ModelSelector from './ModelSelector';
 import chatStyles from './ChatInterface.css';
 import welcomeStyles from '../Welcome/Welcome.css';
 
@@ -14,12 +16,11 @@ interface ChatInterfaceProps {
 }
 
 const ChatInterface: React.FC<ChatInterfaceProps> = ({ layout, vscode }) => {
-    const { chatHistory, isLoading, sendMessage, stopResponse, clearHistory } = useChat(vscode);
+    const { chatHistory, isLoading, sendMessage, clearHistory, setChatHistory } = useChat(vscode);
     const { isFirstTime, isLoading: isCheckingFirstTime, markAsReturningUser, resetFirstTimeUser } = useFirstTimeUser();
     const [inputMessage, setInputMessage] = useState('');
-    const [selectedAgent, setSelectedAgent] = useState('Agent #1');
-    const [selectedModel, setSelectedModel] = useState('claude-4-sonnet');
-    const [expandedTools, setExpandedTools] = useState<{[key: number]: boolean}>({});
+    const [selectedModel, setSelectedModel] = useState<string>('claude-3-5-sonnet-20241022');
+    const [expandedTools, setExpandedTools] = useState<Record<string, boolean>>({});
     const [showFullContent, setShowFullContent] = useState<{[key: string]: boolean}>({});
     const [currentContext, setCurrentContext] = useState<{fileName: string; type: string} | null>(null);
     const [showWelcome, setShowWelcome] = useState<boolean>(false);
@@ -27,6 +28,57 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ layout, vscode }) => {
     // Drag and drop state
     const [uploadingImages, setUploadingImages] = useState<string[]>([]);
     const [pendingImages, setPendingImages] = useState<{fileName: string; originalName: string; fullPath: string}[]>([]);
+    const [toolTimers, setToolTimers] = useState<Record<string, number>>({});
+    const timerIntervals = useRef<Record<string, NodeJS.Timeout>>({});
+
+    // Helper function to check if we have meaningful conversation messages
+    const hasConversationMessages = () => {
+        return chatHistory.some(msg => 
+            msg.role === 'user' || 
+            (msg.role === 'assistant' && typeof msg.content === 'string' && msg.content.trim().length > 0) ||
+            (msg.role === 'assistant' && Array.isArray(msg.content) && msg.content.some(part => part.type === 'text' && (part as any).text?.trim().length > 0))
+        );
+    };
+
+    // Request current provider on mount
+    useEffect(() => {
+        vscode.postMessage({
+            command: 'getCurrentProvider'
+        });
+        
+        const handleMessage = (event: MessageEvent) => {
+            const message = event.data;
+            if (message.command === 'currentProviderResponse') {
+                let fallbackModel: string;
+                switch (message.provider) {
+                    case 'openai':
+                        fallbackModel = 'gpt-4o';
+                        break;
+                    case 'openrouter':
+                        fallbackModel = 'anthropic/claude-3-7-sonnet-20250219';
+                        break;
+                    case 'anthropic':
+                    default:
+                        fallbackModel = 'claude-3-5-sonnet-20241022';
+                        break;
+                }
+                setSelectedModel(message.model || fallbackModel);
+            } else if (message.command === 'providerChanged') {
+                setSelectedModel(message.model);
+            }
+        };
+        
+        window.addEventListener('message', handleMessage);
+        return () => window.removeEventListener('message', handleMessage);
+    }, []);
+
+    const handleModelChange = (model: string) => {
+        // Send model change request to extension
+        vscode.postMessage({
+            command: 'changeProvider',
+            model: model
+        });
+    };
 
     useEffect(() => {
         // Inject ChatInterface CSS styles
@@ -136,11 +188,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ layout, vscode }) => {
 
     // Handle first-time user welcome display
     useEffect(() => {
-        if (!isCheckingFirstTime && isFirstTime && chatHistory.length === 0) {
+        if (!isCheckingFirstTime && isFirstTime && !hasConversationMessages()) {
             setShowWelcome(true);
             console.log('👋 Showing welcome for first-time user');
         }
-    }, [isCheckingFirstTime, isFirstTime, chatHistory.length]);
+    }, [isCheckingFirstTime, isFirstTime, chatHistory]);
 
     // Auto-collapse tools when new messages arrive
     useEffect(() => {
@@ -149,7 +201,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ layout, vscode }) => {
                 const newState = { ...prev };
                 const toolIndices = chatHistory
                     .map((msg, index) => ({ msg, index }))
-                    .filter(({ msg }) => msg.type === 'tool' || msg.type === 'tool-result')
+                    .filter(({ msg }) => msg.role === 'tool')
                     .map(({ index }) => index);
                 
                 // Keep only the last tool/tool-result expanded
@@ -170,26 +222,99 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ layout, vscode }) => {
         return () => window.removeEventListener('autoCollapseTools', handleAutoCollapse);
     }, [chatHistory]);
 
-    const handleSendMessage = () => {
+    const handleSendMessage = async () => {
         if (inputMessage.trim()) {
-            let finalMessage = inputMessage;
+            let messageContent: any;
             
             console.log('📤 Sending message with context:', currentContext);
             console.log('📤 Input message:', inputMessage);
             
-            // Add context prefix if available
-            if (currentContext) {
-                if (currentContext.type === 'images') {
-                    finalMessage = `Context: Multiple images in moodboard\n\nMessage: ${inputMessage}`;
-                } else {
-                    finalMessage = `Context: ${currentContext.fileName}\n\nMessage: ${inputMessage}`;
+            // Check if we have image context to include
+            if (currentContext && (currentContext.type === 'image' || currentContext.type === 'images')) {
+                try {
+                    // Create structured content with text and images
+                    const contentParts: any[] = [
+                        {
+                            type: 'text',
+                            text: inputMessage
+                        }
+                    ];
+                    
+                    // Process image context
+                    const imagePaths = currentContext.type === 'images' 
+                        ? currentContext.fileName.split(', ')
+                        : [currentContext.fileName];
+                    
+                    // Convert each image to base64
+                    for (const imagePath of imagePaths) {
+                        try {
+                            // Request base64 data from the extension
+                            const base64Data = await new Promise<string>((resolve, reject) => {
+                                const timeoutId = setTimeout(() => {
+                                    reject(new Error('Timeout waiting for base64 data'));
+                                }, 10000);
+                                
+                                const handler = (event: MessageEvent) => {
+                                    const message = event.data;
+                                    if (message.command === 'base64ImageResponse' && message.filePath === imagePath) {
+                                        clearTimeout(timeoutId);
+                                        window.removeEventListener('message', handler);
+                                        if (message.error) {
+                                            reject(new Error(message.error));
+                                        } else {
+                                            resolve(message.base64Data);
+                                        }
+                                    }
+                                };
+                                
+                                window.addEventListener('message', handler);
+                                
+                                // Request base64 data from extension
+                                vscode.postMessage({
+                                    command: 'getBase64Image',
+                                    filePath: imagePath
+                                });
+                            });
+                            
+                            // Extract MIME type from base64 data URL
+                            const mimeMatch = base64Data.match(/^data:([^;]+);base64,/);
+                            const mimeType = mimeMatch ? mimeMatch[1] : 'image/png';
+                            const base64Content = base64Data.replace(/^data:[^;]+;base64,/, '');
+                            
+                            contentParts.push({
+                                type: 'image',
+                                image: base64Content,
+                                mimeType: mimeType
+                            });
+                            
+                            console.log('📎 Added image to message:', imagePath, 'MIME:', mimeType);
+                        } catch (error) {
+                            console.error('Failed to load image:', imagePath, error);
+                            // Add error note to text content instead
+                            contentParts[0].text += `\n\n[Note: Could not load image ${imagePath}: ${error}]`;
+                        }
+                    }
+                    
+                    messageContent = contentParts;
+                    console.log('📤 Final structured message content:', contentParts.length, 'parts');
+                } catch (error) {
+                    console.error('Error processing images:', error);
+                    // Fallback to text-only message with context info
+                    messageContent = currentContext.type === 'images' 
+                        ? `Context: Multiple images in moodboard\n\nMessage: ${inputMessage}`
+                        : `Context: ${currentContext.fileName}\n\nMessage: ${inputMessage}`;
                 }
-                console.log('📤 Final message with context:', finalMessage);
+            } else if (currentContext) {
+                // Non-image context - use simple text format
+                messageContent = `Context: ${currentContext.fileName}\n\nMessage: ${inputMessage}`;
+                console.log('📤 Final message with non-image context:', messageContent);
             } else {
+                // No context - just the message text
+                messageContent = inputMessage;
                 console.log('📤 No context available, sending message as-is');
             }
             
-            sendMessage(finalMessage);
+            sendMessage(messageContent);
             setInputMessage('');
         }
     };
@@ -201,37 +326,61 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ layout, vscode }) => {
         }
     };
 
+    const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+        setInputMessage(e.target.value);
+        resizeTextarea(e.target);
+    };
+
+    const resizeTextarea = (textarea: HTMLTextAreaElement) => {
+        // Auto-resize textarea
+        textarea.style.height = 'auto'; // Reset height to calculate new height
+        
+        // Set height based on scroll height, with max height of 120px (about 6 lines)
+        const maxHeight = 120;
+        const newHeight = Math.min(textarea.scrollHeight, maxHeight);
+        textarea.style.height = `${newHeight}px`;
+    };
+
+    // Reset textarea height when input is cleared (e.g., after sending message)
+    useEffect(() => {
+        if (!inputMessage.trim()) {
+            const textarea = document.querySelector('.message-input') as HTMLTextAreaElement;
+            if (textarea) {
+                textarea.style.height = 'auto';
+            }
+        }
+    }, [inputMessage]);
+
     const handleAddContext = () => {
         // TODO: Implement context addition functionality
         console.log('Add Context clicked');
     };
 
-    const handleCopyMessage = (message: string) => {
-        navigator.clipboard.writeText(message).then(() => {
-            // Could add a toast notification here
-            console.log('Message copied to clipboard');
-        });
-    };
-
-    const handleLikeMessage = (index: number) => {
-        // TODO: Implement like functionality
-        console.log('Liked message:', index);
-    };
-
-    const handleDislikeMessage = (index: number) => {
-        // TODO: Implement dislike functionality
-        console.log('Disliked message:', index);
-    };
-
     const handleNewConversation = () => {
         clearHistory();
+        setInputMessage('');
         setCurrentContext(null);
+        setUploadingImages([]);
+        setPendingImages([]);
+        setToolTimers({}); // Clear all tool timers
+        
+        // Clear all timer intervals
+        Object.values(timerIntervals.current).forEach(timer => clearInterval(timer));
+        timerIntervals.current = {};
+        
+        markAsReturningUser();
     };
 
     const handleWelcomeGetStarted = () => {
         setShowWelcome(false);
         markAsReturningUser();
         console.log('👋 User clicked Get Started, welcome dismissed');
+        
+        // Auto-trigger initialize Superdesign command
+        vscode.postMessage({
+            command: 'initializeSuperdesign'
+        });
+        console.log('🚀 Auto-triggering Initialize Superdesign command');
     };
 
     // Drag and drop handlers
@@ -340,8 +489,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ layout, vscode }) => {
         reader.readAsDataURL(file);
     };
 
+    // Auto-set context when images finish uploading
     useEffect(() => {
-        // Auto-set context when images finish uploading
         if (uploadingImages.length === 0 && pendingImages.length > 0) {
             if (pendingImages.length === 1) {
                 // Single image - set as context with full path
@@ -361,6 +510,93 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ layout, vscode }) => {
             setPendingImages([]);
         }
     }, [uploadingImages.length, pendingImages.length]);
+
+    // Helper function to check if tool is loading
+    const isToolLoading = (toolCallPart: any, msgIndex: number) => {
+        const toolCallId = toolCallPart.toolCallId;
+        const hasResult = chatHistory.slice(msgIndex + 1).some(laterMsg => 
+            laterMsg.role === 'tool' && 
+            Array.isArray(laterMsg.content) &&
+            laterMsg.content.some(resultPart => 
+                resultPart.type === 'tool-result' && 
+                (resultPart as any).toolCallId === toolCallId
+            )
+        );
+        return !hasResult || toolCallPart.metadata?.is_loading || false;
+    };
+
+    // Manage countdown timers for tool calls
+    useEffect(() => {
+        const activeTimers = new Set<string>();
+        
+        // Process each message to find tool calls
+        chatHistory.forEach((msg, msgIndex) => {
+            if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+                // Find tool call parts and use same indexing as UI
+                const toolCallParts = msg.content.filter(part => part.type === 'tool-call') as any[];
+                
+                toolCallParts.forEach((toolCallPart, toolCallIndex) => {
+                    const uniqueKey = `${msgIndex}_${toolCallIndex}`;  // Use tool call index, not content index
+                    const isLoading = isToolLoading(toolCallPart, msgIndex);
+                    
+                    activeTimers.add(uniqueKey);
+                    
+                    if (isLoading) {
+                        // Initialize timer if doesn't exist
+                        setToolTimers(prev => {
+                            if (!(uniqueKey in prev)) {
+                                const estimatedDuration = toolCallPart.metadata?.estimated_duration || 90;
+                                const elapsedTime = toolCallPart.metadata?.elapsed_time || 0;
+                                const initialRemaining = Math.max(0, estimatedDuration - elapsedTime);
+                                
+                                return {
+                                    ...prev,
+                                    [uniqueKey]: initialRemaining
+                                };
+                            }
+                            return prev;
+                        });
+                        
+                        // Start interval if not already running
+                        if (!timerIntervals.current[uniqueKey]) {
+                            timerIntervals.current[uniqueKey] = setInterval(() => {
+                                setToolTimers(current => {
+                                    const newTime = Math.max(0, (current[uniqueKey] || 0) - 1);
+                                    return {
+                                        ...current,
+                                        [uniqueKey]: newTime
+                                    };
+                                });
+                            }, 1000);
+                        }
+                    } else {
+                        // Tool completed, clean up
+                        if (timerIntervals.current[uniqueKey]) {
+                            clearInterval(timerIntervals.current[uniqueKey]);
+                            delete timerIntervals.current[uniqueKey];
+                        }
+                        setToolTimers(prev => {
+                            const { [uniqueKey]: removed, ...rest } = prev;
+                            return rest;
+                        });
+                    }
+                });
+            }
+        });
+        
+        // Clean up orphaned timers
+        Object.keys(timerIntervals.current).forEach(key => {
+            if (!activeTimers.has(key)) {
+                clearInterval(timerIntervals.current[key]);
+                delete timerIntervals.current[key];
+            }
+        });
+        
+        // Cleanup on unmount
+        return () => {
+            Object.values(timerIntervals.current).forEach(timer => clearInterval(timer));
+        };
+    }, [chatHistory]);
 
     // Global drag & drop fallback for VS Code webview
     useEffect(() => {
@@ -447,61 +683,124 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ layout, vscode }) => {
     }, [isLoading, handleImageUpload, showWelcome]);
 
     const renderChatMessage = (msg: ChatMessage, index: number) => {
-        const isLastUserMessage = msg.type === 'user-input' && index === chatHistory.length - 1 && isLoading;
-        const isLastStreamingMessage = (msg.type === 'assistant' || msg.type === 'result') && index === chatHistory.length - 1;
-        const isStreaming = isLastStreamingMessage && isLoading;
-        const messageText = typeof msg.message === 'string' ? msg.message : JSON.stringify(msg.message);
+        // Helper function to extract text content from CoreMessage
+        const getMessageText = (msg: ChatMessage): string => {
+            if (typeof msg.content === 'string') {
+                return msg.content;
+            } else if (Array.isArray(msg.content)) {
+                // Find text parts and concatenate them
+                return msg.content
+                    .filter(part => part.type === 'text')
+                    .map(part => (part as any).text)
+                    .join('\n');
+            }
+            return '';
+        };
+
+        // Check if message has tool calls
+        const hasToolCalls = Array.isArray(msg.content) && 
+            msg.content.some(part => part.type === 'tool-call');
+            
+        // Helper function to find tool result for a tool call
+        const findToolResult = (toolCallId: string) => {
+            // Look for a tool message with matching toolCallId
+            for (let i = index + 1; i < chatHistory.length; i++) {
+                const laterMsg = chatHistory[i];
+                if (laterMsg.role === 'tool' && Array.isArray(laterMsg.content)) {
+                    const toolResultPart = laterMsg.content.find(
+                        part => part.type === 'tool-result' && (part as any).toolCallId === toolCallId
+                    );
+                    if (toolResultPart) {
+                        return toolResultPart as any;
+                    }
+                }
+            }
+            return null;
+        };
         
-        // Handle tool messages specially
-        if (msg.type === 'tool') {
-            return renderToolMessage(msg, index);
+        // Check if message has tool results
+        const hasToolResults = Array.isArray(msg.content) && 
+            msg.content.some(part => part.type === 'tool-result');
+
+        const isLastUserMessage = msg.role === 'user' && index === chatHistory.length - 1 && isLoading;
+        const isLastStreamingMessage = (msg.role === 'assistant' || hasToolResults) && index === chatHistory.length - 1;
+        const isStreaming = isLastStreamingMessage && isLoading;
+        const messageText = getMessageText(msg);
+        
+        // Handle tool call messages specially - but for mixed content, we need to show both text AND tools
+        if (msg.role === 'assistant' && hasToolCalls) {
+            // Check if there's also text content
+            const hasTextContent = messageText.trim().length > 0;
+            
+            if (hasTextContent) {
+                // Mixed content: show both text and tool calls
+                return (
+                    <div key={index} className={`chat-message chat-message--assistant chat-message--${layout} chat-message--mixed-content`}>
+                        {layout === 'panel' && (
+                            <div className="chat-message__header">
+                                <span className="chat-message__label">Claude</span>
+                                {msg.metadata && (
+                                    <span className="chat-message__metadata">
+                                        {msg.metadata.duration_ms && (
+                                            <span className="metadata-item">{msg.metadata.duration_ms}ms</span>
+                                        )}
+                                        {msg.metadata.total_cost_usd && (
+                                            <span className="metadata-item">${msg.metadata.total_cost_usd.toFixed(4)}</span>
+                                        )}
+                                    </span>
+                                )}
+                            </div>
+                        )}
+                        <div className="chat-message__content">
+                            <MarkdownRenderer content={messageText} />
+                            {isStreaming && <span className="streaming-cursor">▋</span>}
+                        </div>
+                        <div className="chat-message__tools">
+                            {renderToolCalls(msg, index, findToolResult)}
+                        </div>
+                    </div>
+                );
+            } else {
+                // Only tool calls, no text content - use original tool-only rendering
+                return renderToolCalls(msg, index, findToolResult);
+            }
         }
         
-        // Handle tool groups specially
-        if (msg.type === 'tool-group') {
-            return renderToolGroup(msg, index);
+        // Handle error messages with actions specially  
+        if (msg.role === 'assistant' && msg.metadata?.is_error && msg.metadata?.actions) {
+            return renderErrorMessage(msg, index, setChatHistory);
         }
         
         // Determine message label and styling
         let messageLabel = '';
         let messageClass = '';
         
-        switch (msg.type) {
-            case 'user-input':
+        switch (msg.role) {
+            case 'user':
                 messageLabel = 'You';
                 messageClass = 'user';
-                break;
-            case 'user':
-                messageLabel = 'Claude (User Message)';
-                messageClass = 'user-sdk';
                 break;
             case 'assistant':
                 messageLabel = 'Claude';
                 messageClass = 'assistant';
                 break;
-            case 'result':
-                if (msg.subtype === 'success') {
-                    messageLabel = 'Result';
-                } else if (msg.subtype === 'error_max_turns') {
-                    messageLabel = 'Error (Max Turns)';
-                } else if (msg.subtype === 'error_during_execution') {
-                    messageLabel = 'Error (Execution)';
-                } else if (msg.subtype === 'stopped') {
-                    messageLabel = 'Stopped';
-                } else if (msg.subtype === 'error') {
-                    messageLabel = 'Error';
-                } else {
-                    messageLabel = 'Result';
-                }
-                messageClass = msg.metadata?.is_error ? 'result-error' : 'result';
+            case 'system':
+                messageLabel = 'System';
+                messageClass = 'system';
+                break;
+            case 'tool':
+                messageLabel = 'Tool Result';
+                messageClass = 'tool-result';
                 break;
         }
         
+        const hasToolCall = hasToolCalls || hasToolResults;
+        
         return (
-            <div key={index} className={`chat-message chat-message--${messageClass} chat-message--${layout}`}>
+            <div key={index} className={`chat-message chat-message--${messageClass} chat-message--${layout} ${hasToolCall ? 'chat-message--tool-container' : ''}`}>
                 {layout === 'panel' && (
                     <div className="chat-message__header">
-                    <span className="chat-message__label">
+                        <span className="chat-message__label">
                             {messageLabel}
                         </span>
                         {msg.metadata && (
@@ -512,15 +811,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ layout, vscode }) => {
                                 {msg.metadata.total_cost_usd && (
                                     <span className="metadata-item">${msg.metadata.total_cost_usd.toFixed(4)}</span>
                                 )}
-                                {msg.metadata.num_turns && (
-                                    <span className="metadata-item">{msg.metadata.num_turns} turns</span>
-                                )}
-                    </span>
+                            </span>
+                        )}
+                    </div>
                 )}
-            </div>
-                )}
-            <div className="chat-message__content">
-                    {(msg.type === 'assistant' || msg.type === 'result') ? (
+                <div className="chat-message__content">
+                    {(msg.role === 'assistant') ? (
                         <MarkdownRenderer content={messageText} />
                     ) : (
                         (() => {
@@ -560,81 +856,129 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ layout, vscode }) => {
                     )}
                     {isStreaming && <span className="streaming-cursor">▋</span>}
                 </div>
-                {(msg.type === 'assistant' || msg.type === 'result') && !isStreaming && (
-                    <div className="message-actions">
-                        <button 
-                            onClick={() => handleLikeMessage(index)}
-                            className="action-btn like-btn"
-                            title="Like response"
-                        >
-                            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-                                <path d="M8.864.046C7.908-.193 7.02.53 6.956 1.466c-.072 1.051-.23 2.016-.428 2.59-.125.36-.479 1.013-1.04 1.639-.557.623-1.282 1.178-2.131 1.41C2.685 7.288 2 7.87 2 8.72v4.001c0 .845.682 1.464 1.448 1.545 1.07.114 1.564.415 2.068.723l.048.03c.272.165.578.348.97.484.397.136.861.217 1.466.217h3.5c.937 0 1.599-.477 1.934-1.064a1.86 1.86 0 0 0 .254-.912c0-.152-.023-.312-.077-.464.201-.263.38-.578.488-.901.11-.33.172-.762.004-1.149.069-.13.12-.269.159-.403.077-.27.113-.568.113-.857 0-.288-.036-.585-.113-.856a2.144 2.144 0 0 0-.138-.362 1.9 1.9 0 0 0 .234-1.734c-.206-.592-.682-1.1-1.2-1.272-.847-.282-1.803-.276-2.516-.211a9.84 9.84 0 0 0-.443.05 9.365 9.365 0 0 0-.062-4.509A1.38 1.38 0 0 0 9.125.111L8.864.046zM11.5 14.721H8c-.51 0-.863-.069-1.14-.164-.281-.097-.506-.228-.776-.393l-.04-.024c-.555-.339-1.198-.731-2.49-.868-.333-.036-.554-.29-.554-.55V8.72c0-.254.226-.543.62-.65 1.095-.3 1.977-.996 2.614-1.708.635-.71 1.064-1.475 1.238-1.978.243-.7.407-1.768.482-2.85.025-.362.36-.594.667-.518l.262.066c.16.04.258.143.288.255a8.34 8.34 0 0 1-.145 4.725.5.5 0 0 0 .595.644l.003-.001.014-.003.058-.014a8.908 8.908 0 0 1 1.036-.157c.663-.06 1.457-.054 2.11.164.175.058.45.3.57.65.107.308.087.67-.266 1.022l-.353.353.353.354c.043.043.105.141.154.315.048.167.075.37.075.581 0 .212-.027.414-.075.582-.05.174-.111.272-.154.315l-.353.353.353.354c.047.047.109.177.005.488a2.224 2.224 0 0 1-.505.805l-.353.353.353.354c.006.005.041.05.041.17a.866.866 0 0 1-.121.416c-.165.288-.503.56-1.066.56z"/>
-                            </svg>
-                        </button>
-                        <button 
-                            onClick={() => handleDislikeMessage(index)}
-                            className="action-btn dislike-btn"
-                            title="Dislike response"
-                        >
-                            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-                                <path d="M8.864 15.674c-.956.24-1.843-.484-1.908-1.42-.072-1.05-.23-2.015-.428-2.59-.125-.36-.479-1.012-1.04-1.638-.557-.624-1.282-1.179-2.131-1.41C2.685 8.432 2 7.85 2 7V3c0-.845.682-1.464 1.448-1.546 1.07-.113 1.564-.415 2.068-.723l.048-.029c.272-.166.578-.349.97-.484C6.931.082 7.395 0 8 0h3.5c.937 0 1.599.478 1.934 1.064.164.287.254.607.254.913 0 .152-.023.312-.077.464.201.262.38.577.488.9.11.33.172.762.004 1.15.069.129.12.268.159.403.077.27.113.567.113.856 0 .289-.036.586-.113.856-.035.12-.08.244-.138.363.394.571.418 1.2.234 1.733-.206.592-.682 1.1-1.2 1.272-.847.283-1.803.276-2.516.211a9.877 9.877 0 0 1-.443-.05 9.364 9.364 0 0 1-.062 4.51c-.138.508-.55.848-1.012.964l-.261.065zM11.5 1H8c-.51 0-.863.068-1.14.163-.281.097-.506.229-.776.393l-.04.025c-.555.338-1.198.73-2.49.868-.333.035-.554.29-.554.55V7c0 .255.226.543.62.65 1.095.3 1.977.997 2.614 1.709.635.71 1.064 1.475 1.238 1.977.243.7.407 1.768.482 2.85.025.362.36.595.667.518l.262-.065c.16-.04.258-.144.288-.255a8.34 8.34 0 0 0-.145-4.726.5.5 0 0 1 .595-.643h.003l.014.004.058.013a8.912 8.912 0 0 0 1.036.157c.663.06 1.457.054 2.11-.164.175-.058.45-.3.57-.65.107-.308.087-.67-.266-1.021L12.793 6l.353-.354c.043-.042.105-.14.154-.315.048-.167.075-.37.075-.581 0-.211-.027-.414-.075-.581-.05-.174-.111-.273-.154-.315L12.793 4l.353-.354c.047-.047.109-.176.005-.488a2.224 2.224 0 0 0-.505-.804L12.293 2l.353-.354c.006-.005.041-.05.041-.17a.866.866 0 0 0-.121-.415C12.4 1.272 12.063 1 11.5 1z"/>
-                            </svg>
-                        </button>
-                        <button 
-                            onClick={() => handleCopyMessage(messageText)}
-                            className="action-btn copy-btn"
-                            title="Copy response"
-                        >
-                            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-                                <path d="M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1v-1z"/>
-                                <path d="M9.5 1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-3a.5.5 0 0 1-.5-.5v-1a.5.5 0 0 1 .5-.5h3zm-3-1A1.5 1.5 0 0 0 5 1.5v1A1.5 1.5 0 0 0 6.5 4h3A1.5 1.5 0 0 0 11 2.5v-1A1.5 1.5 0 0 0 9.5 0h-3z"/>
-                            </svg>
-                        </button>
-                    </div>
-                )}
                 {isLastUserMessage && (
                     <div className="generating-content">
                         <span className="generating-text">Generating</span>
-                        <button 
-                            onClick={stopResponse}
-                            className="generating-stop-btn"
-                            title="Stop response"
-                        >
-                            Stop
-                        </button>
                     </div>
                 )}
             </div>
         );
     };
 
-    const renderToolMessage = (msg: ChatMessage, index: number) => {
+    // New function to handle multiple tool calls in a single message
+    const renderToolCalls = (msg: ChatMessage, index: number, findToolResult: (toolCallId: string) => any) => {
+        if (!Array.isArray(msg.content)) {
+            return <div key={index}>Invalid tool message content</div>;
+        }
+        
+        // Find ALL tool call parts
+        const toolCallParts = msg.content.filter(part => part.type === 'tool-call') as any[];
+        
+        if (toolCallParts.length === 0) {
+            return <div key={index}>No tool calls found</div>;
+        }
+        
+        // Render each tool call separately
+        return (
+            <div key={index} className="tool-calls-container">
+                {toolCallParts.map((toolCallPart, subIndex) => 
+                    renderSingleToolCall(toolCallPart, index, subIndex, findToolResult)
+                )}
+            </div>
+        );
+    };
+
+    // Updated function to render a single tool call with unique subIndex for state management
+    const renderSingleToolCall = (toolCallPart: any, messageIndex: number, subIndex: number, findToolResult: (toolCallId: string) => any) => {
         try {
-            const isExpanded = expandedTools[index] || false;
-            const showFullResult = showFullContent[index] || false;
-            const showFullInput = showFullContent[`${index}_input`] || false;
-            const showFullPrompt = showFullContent[`${index}_prompt`] || false;
+            const toolName = toolCallPart.toolName || 'Unknown Tool';
+            const toolInput = toolCallPart.args || {};
+            const uniqueKey = `${messageIndex}_${subIndex}`;
             
-            const toolName = msg.metadata?.tool_name || 'Unknown Tool';
-            const toolInput = msg.metadata?.tool_input || {};
+            // Special handling for generateTheme tool calls
+            if (toolName === 'generateTheme') {
+                // For generateTheme, check if we have a tool result to determine completion
+                const toolCallId = toolCallPart.toolCallId;
+                const toolResultPart = findToolResult(toolCallId);
+                const hasResult = !!toolResultPart;
+                const resultIsError = toolResultPart?.isError || false;
+                
+                // Tool is loading if we don't have a result yet, or if metadata indicates loading
+                const isLoading = !hasResult || toolCallPart.metadata?.is_loading || false;
+                
+                // Extract theme data from tool input
+                const themeName = toolInput.theme_name || 'Untitled Theme';
+                const reasoning = toolInput.reasoning_reference || '';
+                const cssSheet = toolInput.cssSheet || '';
+                
+                // Try to get CSS file path from metadata or result
+                let cssFilePath = null;
+                if (hasResult && !resultIsError) {
+                    // Check both input and result for cssFilePath
+                    cssFilePath = toolInput.cssFilePath || toolResultPart?.result?.cssFilePath;
+                }
+                
+                return (
+                    <div key={uniqueKey} className={`theme-tool-message theme-tool-message--${layout}`}>
+                        <ThemePreviewCard
+                            themeName={themeName}
+                            reasoning={reasoning}
+                            cssSheet={cssFilePath ? null : cssSheet}
+                            cssFilePath={cssFilePath}
+                            isLoading={isLoading}
+                            vscode={vscode}
+                        />
+                        {resultIsError && (
+                            <div className="theme-error-notice" style={{
+                                margin: '0.5rem 0',
+                                padding: '0.75rem',
+                                backgroundColor: 'var(--destructive)',
+                                color: 'var(--destructive-foreground)',
+                                borderRadius: '0.375rem',
+                                fontSize: '0.875rem'
+                            }}>
+                                ⚠️ Theme generation encountered an error. The preview above shows the input data.
+                            </div>
+                        )}
+                    </div>
+                );
+            }
+            
+            // Continue with existing generic tool rendering for other tools
+            const isExpanded = expandedTools[uniqueKey] || false;
+            const showFullResult = showFullContent[uniqueKey] || false;
+            const showFullInput = showFullContent[`${uniqueKey}_input`] || false;
+            const showFullPrompt = showFullContent[`${uniqueKey}_prompt`] || false;
+            
             const description = toolInput.description || '';
             const command = toolInput.command || '';
             const prompt = toolInput.prompt || '';
             
-            // Tool result data
-            const hasResult = msg.metadata?.result_received || false;
-            const isLoading = msg.metadata?.is_loading || false;
-            const toolResult = msg.metadata?.tool_result || '';
-            const resultIsError = msg.metadata?.result_is_error || false;
+            // Tool result data - find from separate tool message
+            const toolCallId = toolCallPart.toolCallId;
+            const toolResultPart = findToolResult(toolCallId);
+            const hasResult = !!toolResultPart;
+            const resultIsError = toolResultPart?.isError || false;
+            
+            // Tool is loading if we don't have a result yet, or if metadata indicates loading
+            const isLoading = !hasResult || toolCallPart.metadata?.is_loading || false;
+            
+            const toolResult = toolResultPart ? 
+                (typeof toolResultPart.result === 'string' ? toolResultPart.result : JSON.stringify(toolResultPart.result, null, 2)) : 
+                '';
             
             // Tool is complete when it has finished (regardless of errors)
             const toolComplete = hasResult && !isLoading;
             
+            // Get the countdown timer for this specific tool
+            const timerRemaining = toolTimers[uniqueKey] || 0;
+            
             // Enhanced loading data
-            const estimatedDuration = msg.metadata?.estimated_duration || 90;
-            const elapsedTime = msg.metadata?.elapsed_time || 0;
-            const progressPercentage = msg.metadata?.progress_percentage || 0;
-            const remainingTime = Math.max(0, estimatedDuration - elapsedTime);
+            const estimatedDuration = toolCallPart.metadata?.estimated_duration || 90;
+            const elapsedTime = toolCallPart.metadata?.elapsed_time || 0;
+            const progressPercentage = toolCallPart.metadata?.progress_percentage || 0;
+            // Use timer state for remaining time, fallback to calculated if timer not started yet
+            const remainingTime = isLoading ? (timerRemaining > 0 ? timerRemaining : Math.max(0, estimatedDuration - elapsedTime)) : 0;
             
             // Format time display
             const formatTime = (seconds: number): string => {
@@ -701,28 +1045,28 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ layout, vscode }) => {
             const toggleExpanded = () => {
                 setExpandedTools(prev => ({
                     ...prev,
-                    [index]: !prev[index]
+                    [uniqueKey]: !prev[uniqueKey]
                 }));
             };
             
             const toggleShowFullResult = () => {
                 setShowFullContent(prev => ({
                     ...prev,
-                    [index]: !prev[index]
+                    [uniqueKey]: !prev[uniqueKey]
                 }));
             };
             
             const toggleShowFullInput = () => {
                 setShowFullContent(prev => ({
                     ...prev,
-                    [`${index}_input`]: !prev[`${index}_input`]
+                    [`${uniqueKey}_input`]: !prev[`${uniqueKey}_input`]
                 }));
             };
             
             const toggleShowFullPrompt = () => {
                 setShowFullContent(prev => ({
                     ...prev,
-                    [`${index}_prompt`]: !prev[`${index}_prompt`]
+                    [`${uniqueKey}_prompt`]: !prev[`${uniqueKey}_prompt`]
                 }));
             };
             
@@ -749,7 +1093,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ layout, vscode }) => {
                 : prompt;
             
             return (
-                <div key={index} className={`tool-message tool-message--${layout} ${toolComplete ? 'tool-message--complete' : ''} ${isLoading ? 'tool-message--loading' : ''}`}>
+                <div key={uniqueKey} className={`tool-message tool-message--${layout} ${toolComplete ? 'tool-message--complete' : ''} ${isLoading ? 'tool-message--loading' : ''}`}>
                     <div 
                         className="tool-message__header"
                         onClick={toggleExpanded}
@@ -879,145 +1223,94 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ layout, vscode }) => {
         } catch (error) {
             const errorMessage = error instanceof Error ? error.message : 'Unknown error';
             return (
-                <div key={index} className={`tool-message tool-message--${layout} tool-message--error`}>
+                <div key={`${messageIndex}_${subIndex}`} className={`tool-message tool-message--${layout} tool-message--error`}>
                     <div className="tool-message__header">
                         <div className="tool-message__main">
                             <span className="tool-icon">⚠️</span>
                             <div className="tool-info">
-                                <span className="tool-name">Error rendering tool: {msg.metadata?.tool_name || 'Unknown'}</span>
+                                <span className="tool-name">Error rendering tool: {toolCallPart.toolName || 'Unknown'}</span>
                                 <span className="tool-description">{errorMessage}</span>
                             </div>
                         </div>
-            </div>
-        </div>
-    );
+                    </div>
+                </div>
+            );
         }
     };
 
-    const renderToolGroup = (msg: ChatMessage, index: number) => {
-        try {
-            const isExpanded = expandedTools[index] || false;
-            const childTools = msg.metadata?.child_tools || [];
-            const groupName = msg.metadata?.tool_name || 'Tool Group';
-            const hasResults = childTools.some(tool => tool.metadata?.result_received);
-            const hasErrors = childTools.some(tool => tool.metadata?.result_is_error);
-            const isLoading = childTools.some(tool => tool.metadata?.is_loading);
-            
-            // Task is complete when ALL tools have finished (regardless of errors)
-            const allToolsFinished = childTools.length > 0 && childTools.every(tool => tool.metadata?.result_received);
-            const taskComplete = allToolsFinished && !isLoading;
-            
-            // Calculate group progress based on child tools
-            let totalProgress = 0;
-            let totalTime = 0;
-            let remainingTime = 0;
-            if (childTools.length > 0) {
-                childTools.forEach(tool => {
-                    totalProgress += tool.metadata?.progress_percentage || 0;
-                    totalTime += tool.metadata?.estimated_duration || 0;
-                    remainingTime += Math.max(0, (tool.metadata?.estimated_duration || 0) - (tool.metadata?.elapsed_time || 0));
-                });
-                totalProgress = totalProgress / childTools.length;
-                
-                // If all tools are finished, set progress to 100%
-                if (allToolsFinished) {
-                    totalProgress = 100;
-                }
-            }
-            
-            // Format time display
-            const formatTime = (seconds: number): string => {
-                const mins = Math.floor(seconds / 60);
-                const secs = Math.floor(seconds % 60);
-                return `${mins}:${secs.toString().padStart(2, '0')}`;
-            };
-            
-            const toggleExpanded = () => {
-                setExpandedTools(prev => ({
-                    ...prev,
-                    [index]: !prev[index]
-                }));
-            };
-            
-            return (
-                <div key={index} className={`tool-group tool-group--${layout} ${taskComplete ? 'tool-group--complete' : ''} ${isLoading ? 'tool-group--loading' : ''}`}>
-                    <div 
-                        className="tool-group__header"
-                        onClick={toggleExpanded}
-                    >
-                        <div className="tool-group__main">
-                            <span className="tool-group-icon">
-                                {isLoading ? (
-                                    <div className="loading-icon-simple">
-                                        <div className="loading-ring"></div>
-                                    </div>
-                                ) : (
-                                    <GroupIcon />
-                                )}
-                            </span>
-                            <div className="tool-group-info">
-                                <span className="tool-group-name">{groupName}</span>
-                                {isLoading && (
-                                    <span className="tool-time-remaining">
-                                        <ClockIcon /> {formatTime(remainingTime)} remaining
-                                    </span>
-                                )}
-                            </div>
-                        </div>
-                        <div className="tool-group-actions">
-                            <span className="tool-group-count">{childTools.length} steps</span>
-                            {taskComplete && (
-                                <span className="tool-status tool-status--complete">
-                                    <CheckIcon />
-                                </span>
-                            )}
-                            <button className={`tool-expand-btn ${isExpanded ? 'expanded' : ''}`}>
-                                <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-                                    <path d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3A.5.5 0 0 1 8 4z"/>
-                                </svg>
-                            </button>
-                        </div>
+    const renderErrorMessage = (msg: ChatMessage, index: number, setChatHistory: React.Dispatch<React.SetStateAction<ChatMessage[]>>) => {
+        const handleActionClick = (action: { text: string; command: string; args?: string }) => {
+            console.log('Action clicked:', action);
+            vscode.postMessage({
+                command: 'executeAction',
+                actionCommand: action.command,
+                actionArgs: action.args
+            });
+        };
+
+        const handleCloseError = () => {
+            // Remove this error message from chat history
+            setChatHistory((prev: ChatMessage[]) => prev.filter((_, i: number) => i !== index));
+        };
+
+        return (
+            <div key={index} className={`chat-message chat-message--result-error chat-message--${layout}`}>
+                {layout === 'panel' && (
+                    <div className="chat-message__header">
+                        <span className="chat-message__label">Error</span>
+                        <button 
+                            className="error-close-btn"
+                            onClick={handleCloseError}
+                            title="Dismiss error"
+                        >
+                            ×
+                        </button>
                     </div>
-                    {isExpanded && (
-                        <div className="tool-group__children">
-                            {childTools.map((childTool, childIndex) => 
-                                renderToolMessage(childTool, `${index}_${childIndex}` as any)
-                            )}
+                )}
+                <div className="chat-message__content">
+                    <div className="error-message-content">
+                        {typeof msg.content === 'string' ? msg.content : 'Error occurred'}
+                    </div>
+                    {msg.metadata?.actions && msg.metadata.actions.length > 0 && (
+                        <div className="error-actions">
+                            {msg.metadata.actions.map((action, actionIndex) => (
+                                <button
+                                    key={actionIndex}
+                                    onClick={() => handleActionClick(action)}
+                                    className="error-action-btn"
+                                >
+                                    {action.text}
+                                </button>
+                            ))}
                         </div>
                     )}
+                    {layout === 'sidebar' && (
+                        <button 
+                            className="error-close-btn error-close-btn--sidebar"
+                            onClick={handleCloseError}
+                            title="Dismiss error"
+                        >
+                            ×
+                        </button>
+                    )}
                 </div>
-            );
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-            return (
-                <div key={index} className={`tool-group tool-group--${layout} tool-group--error`}>
-                    <div className="tool-group__header">
-                        <div className="tool-group__main">
-                            <span className="tool-group-icon">⚠️</span>
-                            <div className="tool-group-info">
-                                <span className="tool-group-name">Error rendering tool group</span>
-                                <span className="tool-time-remaining">{errorMessage}</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            );
-        }
+            </div>
+        );
     };
 
     const renderPlaceholder = () => (
         <div className={`chat-placeholder chat-placeholder--${layout}`}>
-            {layout === 'panel' && (
-                <div className="chat-placeholder__features">
-                    <p>You can ask about:</p>
-                    <ul>
-                        <li>🎨 Design and UI/UX questions</li>
-                        <li>💻 Code generation and debugging</li>
-                                                        <li>Architecture and best practices</li>
-                        <li>📚 Learning and explanations</li>
-                    </ul>
+            <div className="chat-placeholder__content">
+                <div className="empty-state-message">
+                    <p>
+                        <strong>Cursor/Windsurf/Claude Code rules already added</strong>, prompt Cursor/Windsurf/Claude Code to design UI like <kbd>Help me design a calculator UI</kbd> and preview the UI in Superdesign canvas by <kbd>Cmd+Shift+P</kbd> <code>'Superdesign: Open canvas view'</code>
+                    </p>
+                    <div className="empty-state-divider">OR</div>
+                    <p>
+                        You can start with native superdesign agent chat below <em>(We have better UX)</em>
+                    </p>
                 </div>
-            )}
+            </div>
         </div>
     );
 
@@ -1054,26 +1347,21 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ layout, vscode }) => {
                             onGetStarted={handleWelcomeGetStarted}
                             vscode={vscode}
                         />
-                    ) : chatHistory.length === 0 ? renderPlaceholder() : (
+                    ) : hasConversationMessages() ? (
                         <>
                             {chatHistory
                                 .filter(msg => {
-                                    // Filter out verbose result messages to keep chat clean
-                                    if (msg.type === 'result' && msg.subtype === 'success') {
-                                        return false;
-                                    }
+                                    // All messages are now displayed since we use CoreMessage format
                                     return true;
                                 })
                                 .map(renderChatMessage)
                             }
                         </>
-                    )}
+                    ) : renderPlaceholder()}
                 </div>
 
                 {!showWelcome && (
-                    <div className="chat-input-container">
-                        {/* Main Input Area */}
-                        <div className="chat-input-wrapper">
+                    <div className="chat-input-wrapper">
                         {/* Context Display */}
                         {currentContext ? (
                             <div className="context-display">
@@ -1133,13 +1421,19 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ layout, vscode }) => {
                         {/* Input Area */}
                     <div className="chat-input">
                             <textarea
-                                placeholder="Plan, search, build anything... (Paste images with Ctrl/Cmd+V)"
+                                placeholder="Design a calculator UI..."
                             value={inputMessage}
-                            onChange={(e) => setInputMessage(e.target.value)}
+                            onChange={handleInputChange}
                             onKeyPress={handleKeyPress}
                             disabled={isLoading || showWelcome}
                             className="message-input"
                                 rows={1}
+                                style={{
+                                    minHeight: '20px',
+                                    maxHeight: '120px',
+                                    resize: 'none',
+                                    overflow: inputMessage.split('\n').length > 6 ? 'auto' : 'hidden'
+                                }}
                         />
                         </div>
 
@@ -1147,34 +1441,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ layout, vscode }) => {
                         <div className="input-controls">
                             <div className="selectors-group">
                                 <div className="selector-wrapper">
-                                    <select 
-                                        className="agent-selector"
-                                        value={selectedAgent}
-                                        onChange={(e) => setSelectedAgent(e.target.value)}
+                                    <ModelSelector
+                                        selectedModel={selectedModel}
+                                        onModelChange={handleModelChange}
                                         disabled={isLoading || showWelcome}
-                                    >
-                                        <option value="Agent #1">Agent #1</option>
-                                        <option value="Agent #2">Agent #2</option>
-                                    </select>
-                                    <svg className="selector-icon agent-icon" width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-                                        <path d="M5.68 5.792 7.345 7.75 5.681 9.708a2.75 2.75 0 1 1 0-3.916ZM8 6.978 6.416 5.113a2.75 2.75 0 1 1 3.168 0L8 6.978ZM9.598 7.75 8 6.022l1.598 1.728a2.75 2.75 0 1 1-1.598 0Z"/>
-                                    </svg>
-                                </div>
-
-                                <div className="selector-wrapper">
-                                    <select 
-                                        className="model-selector"
-                                        value={selectedModel}
-                                        onChange={(e) => setSelectedModel(e.target.value)}
-                                        disabled={isLoading || showWelcome}
-                                    >
-                                        <option value="claude-4-sonnet">claude-4-sonnet</option>
-                                        <option value="claude-3-haiku">claude-3-haiku</option>
-                                        <option value="claude-3-opus">claude-3-opus</option>
-                                    </select>
-                                    <svg className="selector-icon model-icon" width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-                                        <path d="M9.5 2A1.5 1.5 0 0 1 11 3.5v1.75l1.85 1.85a.5.5 0 0 1 0 .7L11 9.65V11.5A1.5 1.5 0 0 1 9.5 13h-3A1.5 1.5 0 0 1 5 11.5V9.65L3.15 7.8a.5.5 0 0 1 0-.7L5 5.25V3.5A1.5 1.5 0 0 1 6.5 2h3ZM6 3.5v1.75a.5.5 0 0 1-.146.354L4.207 7.5l1.647 1.396A.5.5 0 0 1 6 9.25V11.5a.5.5 0 0 0 .5.5h3a.5.5 0 0 0 .5-.5V9.25a.5.5 0 0 1 .146-.354L11.793 7.5l-1.647-1.396A.5.5 0 0 1 10 5.75V3.5a.5.5 0 0 0-.5-.5h-3a.5.5 0 0 0-.5.5Z"/>
-                                    </svg>
+                                    />
                                 </div>
                             </div>
                             
@@ -1211,7 +1482,10 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ layout, vscode }) => {
                                 </button>
                                 {isLoading ? (
                                     <button 
-                                        onClick={stopResponse}
+                                        onClick={() => {
+                                            // Stop functionality can be added later
+                                            console.log('Stop requested');
+                                        }}
                                         className="send-btn stop-btn"
                                         title="Stop response"
                                     >
@@ -1234,7 +1508,6 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ layout, vscode }) => {
                             </div>
                         </div>
                     </div>
-                </div>
                 )}
             </div>
         </div>
