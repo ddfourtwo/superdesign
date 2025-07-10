@@ -592,34 +592,31 @@ Make sure to reference the theme patterns shown above, and add custom ones that 
     // Method to check if API key is configured
     hasApiKey(): boolean {
         // Always return true since Claude Code SDK can handle auth on its own
-        // The SDK will use Claude CLI auth if no API key is provided
         return true;
     }
 
     // Method to detect if an error is related to API key authentication
     public isApiKeyAuthError(errorMessage: string): boolean {
+        // Claude Code SDK handles its own authentication
+        // We only return true for specific Claude Code authentication errors
         const authErrorPatterns = [
             'authentication failed',
             'invalid api key',
             'unauthorized',
-            'api key',
             'authentication error',
             'invalid token',
             'access denied',
             '401',
-            'ANTHROPIC_API_KEY',
-            'process exited with code 1',
-            'claude code process exited',
-            'exit code 1'
+            'ANTHROPIC_API_KEY'
         ];
         
         const lowercaseMessage = errorMessage.toLowerCase();
         const isAuthError = authErrorPatterns.some(pattern => lowercaseMessage.includes(pattern));
         
-        Logger.info(`Checking if error is auth-related: "${errorMessage}" -> ${isAuthError}`);
+        Logger.info(`ClaudeCodeService - Checking if error is auth-related: "${errorMessage}" -> ${isAuthError}`);
         if (isAuthError) {
             const matchedPattern = authErrorPatterns.find(pattern => lowercaseMessage.includes(pattern));
-            Logger.info(`Matched pattern: "${matchedPattern}"`);
+            Logger.info(`ClaudeCodeService - Matched pattern: "${matchedPattern}"`);
         }
         
         return isAuthError;
