@@ -419,35 +419,33 @@ Your goal is to extract a generalized and reusable design system from the screen
 
     // Method to check if API key is configured
     hasApiKey(): boolean {
-        const config = vscode.workspace.getConfiguration('superdesign');
-        const apiKey = config.get<string>('anthropicApiKey');
-        return !!apiKey && apiKey.trim().length > 0;
+        // Claude Code SDK handles its own authentication
+        // We return true to indicate that authentication is handled by the SDK
+        return true;
     }
 
     // Method to detect if an error is related to API key authentication
     public isApiKeyAuthError(errorMessage: string): boolean {
+        // Claude Code SDK handles its own authentication
+        // We only return true for specific Claude Code authentication errors
         const authErrorPatterns = [
             'authentication failed',
             'invalid api key',
             'unauthorized',
-            'api key',
             'authentication error',
             'invalid token',
             'access denied',
             '401',
-            'ANTHROPIC_API_KEY',
-            'process exited with code 1',
-            'claude code process exited',
-            'exit code 1'
+            'ANTHROPIC_API_KEY'
         ];
         
         const lowercaseMessage = errorMessage.toLowerCase();
         const isAuthError = authErrorPatterns.some(pattern => lowercaseMessage.includes(pattern));
         
-        Logger.info(`Checking if error is auth-related: "${errorMessage}" -> ${isAuthError}`);
+        Logger.info(`ClaudeCodeService - Checking if error is auth-related: "${errorMessage}" -> ${isAuthError}`);
         if (isAuthError) {
             const matchedPattern = authErrorPatterns.find(pattern => lowercaseMessage.includes(pattern));
-            Logger.info(`Matched pattern: "${matchedPattern}"`);
+            Logger.info(`ClaudeCodeService - Matched pattern: "${matchedPattern}"`);
         }
         
         return isAuthError;
