@@ -35,9 +35,29 @@ npx vsce package
 
 This will create a `.vsix` file (e.g., `superdesign-0.0.6.vsix`) in the project directory.
 
-### 4. Install in Windsurf
+### 4. Install in Windsurf/VS Code
 
-1. Open Windsurf IDE
+#### Option A: Using Command Line (Recommended)
+
+```bash
+code --install-extension superdesign-0.0.6.vsix
+```
+
+Or for VS Code Server:
+
+```bash
+code-server --install-extension superdesign-0.0.6.vsix
+```
+
+For remote VS Code Server installations, you may need to use the full path:
+
+```bash
+~/.vscode-server/cli/servers/Stable-*/server/bin/code-server --install-extension /path/to/superdesign-0.0.6.vsix
+```
+
+#### Option B: Using GUI
+
+1. Open Windsurf IDE or VS Code
 2. Open the Command Palette:
    - **macOS**: `Cmd+Shift+P`
    - **Windows/Linux**: `Ctrl+Shift+P`

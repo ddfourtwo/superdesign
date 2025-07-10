@@ -1,7 +1,7 @@
 // The module 'vscode' contains the VS Code extensibility API
 // Import the module and reference it with the alias vscode in your code below
 import * as vscode from 'vscode';
-import { CustomAgentService } from './services/customAgentService';
+import { ClaudeCodeService } from './services/claudeCodeService';
 import { ChatSidebarProvider } from './providers/chatSidebarProvider';
 import { Logger, LogLevel } from './services/logger';
 import * as path from 'path';
@@ -1247,10 +1247,10 @@ export function activate(context: vscode.ExtensionContext) {
 	Logger.info('Superdesign extension is now active!');
 	// Note: Users can manually open output via View → Output → Select "Superdesign" if needed
 
-	// Initialize Custom Agent service
-	Logger.info('Creating CustomAgentService...');
-	const customAgent = new CustomAgentService(Logger.getOutputChannel());
-	Logger.info('CustomAgentService created');
+	// Initialize Claude Code service
+	Logger.info('Creating ClaudeCodeService...');
+	const claudeCodeService = new ClaudeCodeService(Logger.getOutputChannel());
+	Logger.info('ClaudeCodeService created');
 
 	// The command has been defined in the package.json file
 	// Now provide the implementation of the command with registerCommand
@@ -1276,7 +1276,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 
 	// Create the chat sidebar provider
-	const sidebarProvider = new ChatSidebarProvider(context.extensionUri, customAgent, Logger.getOutputChannel());
+	const sidebarProvider = new ChatSidebarProvider(context.extensionUri, claudeCodeService, Logger.getOutputChannel());
 	
 	// Register the webview view provider for sidebar
 	const sidebarDisposable = vscode.window.registerWebviewViewProvider(
