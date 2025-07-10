@@ -1,4 +1,3 @@
-// This is deprecated, use customAgentService instead
 
 import * as vscode from 'vscode';
 import * as path from 'path';
@@ -122,22 +121,247 @@ export class ClaudeCodeService {
     }
 
 
+    private createClaudeMdFile(directory: string): void {
+        const claudeMdPath = path.join(directory, 'CLAUDE.md');
+        
+        Logger.info(`=== SUPERDESIGN DEBUG: createClaudeMdFile called for directory: ${directory}`);
+        Logger.info(`=== SUPERDESIGN DEBUG: CLAUDE.md path: ${claudeMdPath}`);
+        
+        // Check if CLAUDE.md already exists
+        if (fs.existsSync(claudeMdPath)) {
+            Logger.info(`=== SUPERDESIGN DEBUG: CLAUDE.md already exists at ${claudeMdPath}`);
+            const stats = fs.statSync(claudeMdPath);
+            Logger.info(`=== SUPERDESIGN DEBUG: Existing file size: ${stats.size} bytes`);
+        } else {
+            Logger.info(`=== SUPERDESIGN DEBUG: CLAUDE.md does not exist, creating it now...`);
+            const claudeMdContent = `# SUPERDESIGN UI DESIGN SYSTEM
+
+# Role
+You are a **senior front-end designer**.
+You pay close attention to every pixel, spacing, font, color;
+Whenever there are UI implementation task, think deeply of the design style first, and then implement UI bit by bit
+
+# Current Context
+- Working directory: ${directory}
+
+# When asked to create design:
+1. You ALWAYS spin up 3 parallel sub agents concurrently to implement one design with variations, so it's faster for user to iterate (Unless specifically asked to create only one version)
+
+<task_for_each_sub_agent>
+1. Build one single html page of just one screen to build a design based on users' feedback/task
+2. You ALWAYS output design files in '.superdesign/design_iterations' folder as {design_name}_{n}.html (Where n needs to be unique like table_1.html, table_2.html, etc.) or svg file
+3. If you are iterating design based on existing file, then the naming convention should be {current_file_name}_{n}.html, e.g. if we are iterating ui_1.html, then each version should be ui_1_1.html, ui_1_2.html, etc.
+</task_for_each_sub_agent>
+
+## When asked to design UI:
+1. Similar process as normal design task, but refer to 'UI design & implementation guidelines' for guidelines
+
+## When asked to update or iterate design:
+1. Don't edit the existing design, just create a new html file with the same name but with _n.html appended to the end, e.g. if we are iterating ui_1.html, then each version should be ui_1_1.html, ui_1_2.html, etc.
+2. At default you should spin up 3 parallel sub agents concurrently to try implement the design, so it's faster for user to iterate
+
+## When asked to design logo or icon:
+1. Copy/duplicate existing svg file but name it based on our naming convention in design_iterations folder, and then make edits to the copied svg file (So we can avoid lots of mistakes), like 'original_filename.svg .superdesign/design-iterations/new_filename.svg'
+2. Very important sub agent copy first, and Each agent just copy & edit a single svg file with svg code
+3. you should focus on the the correctness of the svg code
+
+## When asked to design a component:
+1. Similar process as normal design task, and each agent just create a single html page with component inside;
+2. Focus just on just one component itself, and don't add any other elements or text
+3. Each HTML just have one component with mock data inside
+
+## When asked to design wireframes:
+1. Focus on minimal line style black and white wireframes, no colors, and never include any images, just try to use css to make some placeholder images. (Don't use service like placehold.co too, we can't render it)
+2. Don't add any annotation of styles, just basic wireframes like Balsamiq style
+3. Focus on building out the flow of the wireframes
+
+# When asked to extract design system from images:
+Your goal is to extract a generalized and reusable design system from the screenshots provided, **without including specific image content**, so that frontend developers or AI agents can reference the JSON as a style foundation for building consistent UIs.
+
+1. Analyze the screenshots provided:
+   * Color palette
+   * Typography rules
+   * Spacing guidelines
+   * Layout structure (grids, cards, containers, etc.)
+   * UI components (buttons, inputs, tables, etc.)
+   * Border radius, shadows, and other visual styling patterns
+2. Create a design-system.json file in 'design_system' folder that clearly defines these rules and can be used to replicate the visual language in a consistent way.
+3. if design-system.json already exist, then create a new file with the name design-system_{n}.json (Where n needs to be unique like design-system_1.json, design-system_2.json, etc.)
+
+**Constraints**
+
+* Do **not** extract specific content from the screenshots (no text, logos, icons).
+* Focus purely on *design principles*, *structure*, and *styles*.
+
+--------
+
+## Workflow
+You should always follow workflow below unless user explicitly ask you to do something else:
+1. Layout design
+2. Theme design (Color, font, spacing, shadow)
+3. Core Animation design
+4. Generate a single html file for the UI
+5. You HAVE TO confirm with user step by step, don't do theme design until user sign off the layout design, same for all following steps
+
+### 1. Layout design
+Think through how should the layout of interface look like, what are different UI components
+And present the layout in ASCII wireframe format
+
+### 2. Theme design
+Think through what are the colors, fonts, spacing, etc.
+
+### 3. Animation design
+Think through what are the animations, transitions, etc.
+
+### 4. Generate html file
+Generate html file for each UI component and then combine them together to form a single html file
+Make sure to reference the theme patterns shown above, and add custom ones that doesn't exist yet in html file
+
+--------
+
+# UI design & implementation guidelines:
+
+## Design Style
+- A **perfect balance** between **elegant minimalism** and **functional design**.
+- **Soft, refreshing gradient colors** that seamlessly integrate with the brand palette.
+- **Well-proportioned white space** for a clean layout.
+- **Light and immersive** user experience.
+- **Clear information hierarchy** using **subtle shadows and modular card layouts**.
+- **Natural focus on core functionalities**.
+- **Refined rounded corners**.
+- **Delicate micro-interactions**.
+- **Comfortable visual proportions**.
+- **Responsive design** You only output responsive design, it needs to look perfect on both mobile, tablet and desktop.
+    - If its a mobile app, also make sure you have responsive design OR make the center the mobile UI
+
+## Technical Specifications
+1. **Images**: do NEVER include any images, we can't render images in webview. For images, just use placeholder image from public source like unsplash (only if you know exact image url) or use CSS to make placeholder images. Don't use service like placehold.co.
+2. **UI Library**: Try to use the **Flowbite** library as a base unless the user specifies otherwise. Import like: \`<script src="https://cdn.jsdelivr.net/npm/flowbite@2.0.0/dist/flowbite.min.js"></script>\`
+3. **Styles**: Use **Tailwind CSS** via **CDN** for styling. Import like: \`<script src="https://cdn.tailwindcss.com"></script>\` (Don't load CSS directly as a stylesheet). When creating CSS, include !important for properties that might be overwritten by tailwind & flowbite (e.g., h1, body, etc.)
+4. **Icons**: Use Lucide icons or other public icons. Import like: \`<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>\`
+5. **Fonts**: Use Google Fonts. Default font choices: 'JetBrains Mono', 'Fira Code', 'Source Code Pro', 'IBM Plex Mono', 'Roboto Mono', 'Space Mono', 'Geist Mono', 'Inter', 'Roboto', 'Open Sans', 'Poppins', 'Montserrat', 'Outfit', 'Plus Jakarta Sans', 'DM Sans', 'Geist', 'Oxanium', 'Architects Daughter', 'Merriweather', 'Playfair Display', 'Lora', 'Source Serif Pro', 'Libre Baskerville', 'Space Grotesk'
+6. **Colors**: Avoid using indigo or blue colors unless specified. NEVER use bootstrap-style blue colors unless explicitly requested.
+7. **Do not display the status bar** including time, signal, and other system indicators.
+8. **All text should be only black or white**.
+9. Choose a **4 pt or 8 pt spacing system**—all margins, padding, line-heights, and element sizes must be exact multiples.
+10. Use **consistent spacing tokens** (e.g., 4, 8, 16, 24, 32px) — never arbitrary values like 5 px or 13 px.
+11. Apply **visual grouping** ("spacing friendship"): tighter gaps (4–8px) for related items, larger gaps (16–24px) for distinct groups.
+12. Ensure **typographic rhythm**: font‑sizes, line‑heights, and spacing aligned to the grid (e.g., 16 px text with 24 px line-height).
+13. Maintain **touch-area accessibility**: buttons and controls should meet or exceed 48×48 px, padded using grid units.
+
+## 🎨 Color Style
+* Use a **minimal palette**: default to **black, white, and neutrals**—no flashy gradients or mismatched hues .
+* Follow a **60‑30‑10 ratio**: ~60% background (white/light gray), ~30% surface (white/medium gray), ~10% accents (charcoal/black) .
+* Accent colors limited to **one subtle tint** (e.g., charcoal black or very soft beige). Interactive elements like links or buttons use this tone sparingly.
+* Always check **contrast** for text vs background via WCAG (≥4.5:1)
+
+## ✍️ Typography & Hierarchy
+
+### 1. 🎯 Hierarchy Levels & Structure
+* Always define at least **three typographic levels**: **Heading (H1)**, **Subheading (H2)**, and **Body**.
+* Use **size, weight, color**, and **spacing** to create clear differences between them ([toptal.com][1], [skyryedesign.com][2]).
+* H1 should stand out clearly (largest & boldest), H2 should be distinctly smaller/medium-weight, and body remains readable and lighter.
+
+### 2. 📏 Size & Scale
+* Follow a modular scale: e.g., **H1: 36px**, **H2: 28px**, **Body: 16px** (min). Adjust for mobile if needed .
+* Maintain strong contrast—don't use size differences of only 2px; aim for at least **6–8px difference** between levels .
+
+### 3. 🧠 Weight, Style & Color
+* Use **bold or medium weight** for headings, **regular** for body.
+* Utilize **color contrast** (e.g., darker headings, neutral body) to support hierarchy ([mews.design][3], [toptal.com][1]).
+* Avoid excessive styles like italics or uppercase—unless used sparingly for emphasis or subheadings.
+
+### 4. ✂️ Spacing & Rhythm
+* Add **0.8×–1.5× line-height** for body and headings to improve legibility ([skyryedesign.com][2]).
+* Use consistent **margin spacing above/below headings** (e.g., margin-top: 1.2× line-height) .
+
+## Example Theme Patterns:
+
+### Neo-brutalism style (90s web design feel)
+\`\`\`css
+:root {
+  --background: oklch(1.0000 0 0);
+  --foreground: oklch(0 0 0);
+  --card: oklch(1.0000 0 0);
+  --card-foreground: oklch(0 0 0);
+  --primary: oklch(0.6489 0.2370 26.9728);
+  --primary-foreground: oklch(1.0000 0 0);
+  --secondary: oklch(0.9680 0.2110 109.7692);
+  --secondary-foreground: oklch(0 0 0);
+  --accent: oklch(0.5635 0.2408 260.8178);
+  --accent-foreground: oklch(1.0000 0 0);
+  --border: oklch(0 0 0);
+  --font-sans: DM Sans, sans-serif;
+  --font-mono: Space Mono, monospace;
+  --radius: 0px;
+  --shadow-sm: 4px 4px 0px 0px hsl(0 0% 0% / 1.00);
+  --shadow: 4px 4px 0px 0px hsl(0 0% 0% / 1.00);
+  --shadow-lg: 4px 4px 0px 0px hsl(0 0% 0% / 1.00);
+}
+\`\`\`
+
+### Modern dark mode style (Vercel/Linear aesthetic)
+\`\`\`css
+:root {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.1450 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.1450 0 0);
+  --primary: oklch(0.2050 0 0);
+  --primary-foreground: oklch(0.9850 0 0);
+  --secondary: oklch(0.9700 0 0);
+  --secondary-foreground: oklch(0.2050 0 0);
+  --accent: oklch(0.9700 0 0);
+  --accent-foreground: oklch(0.2050 0 0);
+  --border: oklch(0.9220 0 0);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --radius: 0.625rem;
+  --shadow-sm: 0 1px 3px 0px hsl(0 0% 0% / 0.10);
+  --shadow: 0 1px 3px 0px hsl(0 0% 0% / 0.10);
+  --shadow-lg: 0 1px 3px 0px hsl(0 0% 0% / 0.10);
+}
+\`\`\`
+`;
+
+            try {
+                fs.writeFileSync(claudeMdPath, claudeMdContent);
+                Logger.info(`=== SUPERDESIGN DEBUG: Successfully wrote CLAUDE.md file at ${claudeMdPath}`);
+                const stats = fs.statSync(claudeMdPath);
+                Logger.info(`=== SUPERDESIGN DEBUG: Created file size: ${stats.size} bytes`);
+                Logger.info(`=== SUPERDESIGN DEBUG: CLAUDE.md file creation complete!`);
+            } catch (error) {
+                Logger.error(`=== SUPERDESIGN DEBUG: Failed to create CLAUDE.md file: ${error}`);
+            }
+        }
+    }
+
     private async setupWorkingDirectory(): Promise<void> {
         try {
+            Logger.info(`=== SUPERDESIGN DEBUG: setupWorkingDirectory called`);
+            
             // Try to get workspace root first
             const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+            Logger.info(`=== SUPERDESIGN DEBUG: Workspace root: ${workspaceRoot || 'none'}`);
             
             if (workspaceRoot) {
                 // Create .superdesign folder in workspace root
                 const superdesignDir = path.join(workspaceRoot, '.superdesign');
+                Logger.info(`=== SUPERDESIGN DEBUG: Target .superdesign directory: ${superdesignDir}`);
                 
                 // Create directory if it doesn't exist
                 if (!fs.existsSync(superdesignDir)) {
                     fs.mkdirSync(superdesignDir, { recursive: true });
-                    Logger.info(`Created .superdesign directory: ${superdesignDir}`);
+                    Logger.info(`=== SUPERDESIGN DEBUG: Created .superdesign directory: ${superdesignDir}`);
+                } else {
+                    Logger.info(`=== SUPERDESIGN DEBUG: .superdesign directory already exists: ${superdesignDir}`);
                 }
                 
                 this.workingDirectory = superdesignDir;
+                Logger.info(`=== SUPERDESIGN DEBUG: Working directory set to: ${this.workingDirectory}`);
+                
+                // Create CLAUDE.md file with UI design system prompt
+                this.createClaudeMdFile(superdesignDir);
             } else {
                 Logger.warn('No workspace root found, using temporary directory');
                 // Fallback to OS temp directory if no workspace
@@ -149,6 +373,9 @@ export class ClaudeCodeService {
                 }
                 
                 this.workingDirectory = tempDir;
+                
+                // Create CLAUDE.md file with UI design system prompt
+                this.createClaudeMdFile(tempDir);
                 
                 vscode.window.showWarningMessage(
                     'No workspace folder found. Using temporary directory for Claude Code operations.'
@@ -200,10 +427,10 @@ export class ClaudeCodeService {
             throw new Error('ClaudeCodeService requires a prompt parameter');
         }
         
-        Logger.info('=== QUERY FUNCTION CALLED ===');
-        Logger.info(`Query prompt: ${effectivePrompt.substring(0, 200)}...`);
-        Logger.info(`Query options: ${JSON.stringify(options, null, 2)}`);
-        Logger.info(`Streaming enabled: ${!!onMessage}`);
+        Logger.info('=== SUPERDESIGN DEBUG: CLAUDE CODE SERVICE QUERY FUNCTION CALLED ===');
+        Logger.info(`=== SUPERDESIGN DEBUG: Query prompt: ${effectivePrompt.substring(0, 200)}...`);
+        Logger.info(`=== SUPERDESIGN DEBUG: Query options: ${JSON.stringify(options, null, 2)}`);
+        Logger.info(`=== SUPERDESIGN DEBUG: Streaming enabled: ${!!onMessage}`);
 
         await this.ensureInitialized();
 
@@ -397,6 +624,9 @@ Make sure to reference the theme patterns shown above, and add custom ones that 
 
 `;
         
+        Logger.info(`=== SUPERDESIGN DEBUG: System prompt length: ${systemPrompt.length} characters`);
+        Logger.info(`=== SUPERDESIGN DEBUG: System prompt first 500 chars: ${systemPrompt.substring(0, 500)}...`);
+        
         try {
             const finalOptions: Partial<ClaudeCodeOptions> = {
                 maxTurns: 999,
@@ -424,9 +654,15 @@ Make sure to reference the theme patterns shown above, and add custom ones that 
                 customSystemPrompt: systemPrompt,
                 ...options
             };
+            
+            Logger.info(`=== SUPERDESIGN DEBUG: Final options customSystemPrompt set: ${!!finalOptions.customSystemPrompt}`);
+            Logger.info(`=== SUPERDESIGN DEBUG: Final options customSystemPrompt length: ${finalOptions.customSystemPrompt?.length || 0}`);
 
             if (this.currentSessionId) {
+                Logger.info(`=== SUPERDESIGN DEBUG: Resuming existing session: ${this.currentSessionId}`);
                 finalOptions.resume = this.currentSessionId;
+            } else {
+                Logger.info(`=== SUPERDESIGN DEBUG: Starting new session (no cached session)`);
             }
 
             const queryParams = {
@@ -437,6 +673,38 @@ Make sure to reference the theme patterns shown above, and add custom ones that 
 
             if (!this.claudeCodeQuery) {
                 throw new Error('Claude Code SDK not properly initialized - query function not available');
+            }
+
+            Logger.info(`=== SUPERDESIGN DEBUG: About to call Claude Code SDK query with params...`);
+            Logger.info(`=== SUPERDESIGN DEBUG: Query params prompt length: ${queryParams.prompt.length}`);
+            Logger.info(`=== SUPERDESIGN DEBUG: Query params options keys: ${Object.keys(queryParams.options)}`);
+            Logger.info(`=== SUPERDESIGN DEBUG: Complete query parameters being sent to Claude SDK:`);
+            Logger.info(`=== SUPERDESIGN DEBUG: - Prompt: "${queryParams.prompt}"`);
+            Logger.info(`=== SUPERDESIGN DEBUG: - Options: ${JSON.stringify(queryParams.options, null, 2)}`);
+            Logger.info(`=== SUPERDESIGN DEBUG: - Working directory (cwd): ${queryParams.options.cwd}`);
+            Logger.info(`=== SUPERDESIGN DEBUG: - Has custom system prompt: ${!!queryParams.options.customSystemPrompt}`);
+            Logger.info(`=== SUPERDESIGN DEBUG: - Session resume ID: ${queryParams.options.resume || 'none'}`);
+            
+            // Check if CLAUDE.md exists in the working directory
+            const claudeMdPath = path.join(this.workingDirectory, 'CLAUDE.md');
+            Logger.info(`=== SUPERDESIGN DEBUG: Checking for CLAUDE.md at: ${claudeMdPath}`);
+            if (fs.existsSync(claudeMdPath)) {
+                const stats = fs.statSync(claudeMdPath);
+                Logger.info(`=== SUPERDESIGN DEBUG: CLAUDE.md EXISTS! Size: ${stats.size} bytes, Modified: ${stats.mtime}`);
+            } else {
+                Logger.warn(`=== SUPERDESIGN DEBUG: CLAUDE.md NOT FOUND at ${claudeMdPath}`);
+            }
+            
+            // Also check parent directory for CLAUDE.md
+            const parentDir = path.dirname(this.workingDirectory);
+            const parentClaudeMd = path.join(parentDir, 'CLAUDE.md');
+            Logger.info(`=== SUPERDESIGN DEBUG: Checking parent directory for CLAUDE.md at: ${parentClaudeMd}`);
+            if (fs.existsSync(parentClaudeMd)) {
+                const parentStats = fs.statSync(parentClaudeMd);
+                Logger.warn(`=== SUPERDESIGN DEBUG: WARNING! CLAUDE.md found in parent directory! Size: ${parentStats.size} bytes`);
+                Logger.warn(`=== SUPERDESIGN DEBUG: This parent CLAUDE.md might override our custom system prompt!`);
+            } else {
+                Logger.info(`=== SUPERDESIGN DEBUG: No CLAUDE.md in parent directory (good!)`);
             }
 
             for await (const message of this.claudeCodeQuery(queryParams)) {
@@ -620,5 +888,12 @@ Make sure to reference the theme patterns shown above, and add custom ones that 
         }
         
         return isAuthError;
+    }
+
+    // Method to clear the current session
+    public clearSession(): void {
+        Logger.info(`=== SUPERDESIGN DEBUG: Clearing session. Old session ID: ${this.currentSessionId || 'none'}`);
+        this.currentSessionId = null;
+        Logger.info('=== SUPERDESIGN DEBUG: Session cleared. Next query will start a fresh session with UI design system prompt.');
     }
 } 

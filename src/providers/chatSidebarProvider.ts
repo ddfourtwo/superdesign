@@ -16,7 +16,10 @@ export class ChatSidebarProvider implements vscode.WebviewViewProvider {
         private readonly agentService: AgentService,
         private readonly outputChannel: vscode.OutputChannel
     ) {
+        this.outputChannel.appendLine('=== SUPERDESIGN DEBUG: ChatSidebarProvider constructor called');
+        this.outputChannel.appendLine(`=== SUPERDESIGN DEBUG: Received agentService type: ${agentService.constructor.name}`);
         this.messageHandler = new ChatMessageService(agentService, outputChannel);
+        this.outputChannel.appendLine('=== SUPERDESIGN DEBUG: ChatMessageService created with agentService');
     }
 
     public setMessageHandler(handler: (message: any) => void) {

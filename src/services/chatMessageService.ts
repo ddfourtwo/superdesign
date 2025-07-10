@@ -10,7 +10,10 @@ export class ChatMessageService {
     constructor(
         private agentService: AgentService,
         private outputChannel: vscode.OutputChannel
-    ) {}
+    ) {
+        this.outputChannel.appendLine('=== SUPERDESIGN DEBUG: ChatMessageService constructor called');
+        this.outputChannel.appendLine(`=== SUPERDESIGN DEBUG: Using agentService type: ${agentService.constructor.name}`);
+    }
 
     async handleChatMessage(message: any, webview: vscode.Webview): Promise<void> {
         try {
@@ -71,7 +74,9 @@ export class ChatMessageService {
             let response: any[];
             if (chatHistory.length > 0) {
                 // Use conversation history - CoreMessage format is already compatible
-                this.outputChannel.appendLine(`Using conversation history with ${chatHistory.length} messages`);
+                this.outputChannel.appendLine(`=== SUPERDESIGN DEBUG: Using conversation history with ${chatHistory.length} messages`);
+                this.outputChannel.appendLine(`=== SUPERDESIGN DEBUG: About to call agentService.query with conversation history`);
+                this.outputChannel.appendLine(`=== SUPERDESIGN DEBUG: AgentService type: ${this.agentService.constructor.name}`);
                 response = await this.agentService.query(
                     undefined, // no prompt 
                     chatHistory, // use CoreMessage array directly
@@ -82,9 +87,12 @@ export class ChatMessageService {
                         this.handleStreamMessage(streamMessage, webview);
                     }
                 );
+                this.outputChannel.appendLine(`=== SUPERDESIGN DEBUG: agentService.query completed with conversation history`);
             } else {
                 // Fallback to single prompt for first message
-                this.outputChannel.appendLine('No conversation history, using single prompt');
+                this.outputChannel.appendLine('=== SUPERDESIGN DEBUG: No conversation history, using single prompt');
+                this.outputChannel.appendLine(`=== SUPERDESIGN DEBUG: About to call agentService.query with prompt: "${latestMessage}"`);
+                this.outputChannel.appendLine(`=== SUPERDESIGN DEBUG: AgentService type: ${this.agentService.constructor.name}`);
                 response = await this.agentService.query(
                     latestMessage, // use latest message as prompt
                     undefined, // no messages array
@@ -95,6 +103,7 @@ export class ChatMessageService {
                         this.handleStreamMessage(streamMessage, webview);
                     }
                 );
+                this.outputChannel.appendLine(`=== SUPERDESIGN DEBUG: agentService.query completed with single prompt`);
             }
 
             // Check if request was aborted

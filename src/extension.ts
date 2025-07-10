@@ -1248,9 +1248,10 @@ export function activate(context: vscode.ExtensionContext) {
 	// Note: Users can manually open output via View → Output → Select "Superdesign" if needed
 
 	// Initialize Claude Code service
-	Logger.info('Creating ClaudeCodeService...');
+	Logger.info('=== SUPERDESIGN DEBUG: Creating ClaudeCodeService...');
 	const claudeService = new ClaudeCodeService(Logger.getOutputChannel());
-	Logger.info('ClaudeCodeService created');
+	Logger.info('=== SUPERDESIGN DEBUG: ClaudeCodeService created successfully');
+	Logger.info(`=== SUPERDESIGN DEBUG: Service type: ${claudeService.constructor.name}`);
 
 	// The command has been defined in the package.json file
 	// Now provide the implementation of the command with registerCommand
@@ -1276,7 +1277,9 @@ export function activate(context: vscode.ExtensionContext) {
 
 
 	// Create the chat sidebar provider
+	Logger.info('=== SUPERDESIGN DEBUG: Creating ChatSidebarProvider with ClaudeCodeService...');
 	const sidebarProvider = new ChatSidebarProvider(context.extensionUri, claudeService, Logger.getOutputChannel());
+	Logger.info('=== SUPERDESIGN DEBUG: ChatSidebarProvider created successfully');
 	
 	// Register the webview view provider for sidebar
 	const sidebarDisposable = vscode.window.registerWebviewViewProvider(
@@ -1301,6 +1304,13 @@ export function activate(context: vscode.ExtensionContext) {
 
 	// Register clear chat command
 	const clearChatDisposable = vscode.commands.registerCommand('superdesign.clearChat', () => {
+		// Clear the Claude Code session to start fresh with new system prompt
+		if (claudeService.clearSession) {
+			claudeService.clearSession();
+			Logger.info('=== SUPERDESIGN DEBUG: Cleared Claude Code session via clear chat command');
+		}
+		
+		// Send clear chat message to UI
 		sidebarProvider.sendMessage({
 			command: 'clearChat'
 		});

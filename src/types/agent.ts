@@ -12,11 +12,7 @@ export interface AgentService {
     
     hasApiKey(): boolean;
     isApiKeyAuthError(errorMessage: string): boolean;
+    clearSession?(): void;
 }
 
-export interface ExecutionContext {
-    workingDirectory: string;
-    sessionId: string;
-    outputChannel: vscode.OutputChannel;
-    abortController?: AbortController;
-} 
+ 
