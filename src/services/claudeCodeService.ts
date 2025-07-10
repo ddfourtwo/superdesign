@@ -179,20 +179,31 @@ export class ClaudeCodeService {
 
     async query(prompt?: string, conversationMessages?: any, options?: Partial<ClaudeCodeOptions>, abortController?: AbortController, onMessage?: (message: SDKMessage) => void): Promise<SDKMessage[]> {
         // ClaudeCodeService handles conversation via internal session management
-        // so we ignore conversationMessages and just use the prompt
+        // If conversationMessages are provided, convert them to a prompt
         
-        if (!prompt) {
+        let effectivePrompt = prompt;
+        
+        if (!effectivePrompt && conversationMessages && conversationMessages.length > 0) {
+            // Convert conversation messages to a prompt
+            const messages = conversationMessages.map((msg: any) => {
+                const content = typeof msg.content === 'string' ? msg.content : 
+                    Array.isArray(msg.content) ? msg.content.map((part: any) => 
+                        part.type === 'text' ? part.text : `[${part.type}]`
+                    ).join('') : '[complex content]';
+                return `${msg.role}: ${content}`;
+            });
+            effectivePrompt = messages.join('\n\n');
+            Logger.info('Converted conversation history to prompt');
+        }
+        
+        if (!effectivePrompt) {
             throw new Error('ClaudeCodeService requires a prompt parameter');
         }
         
         Logger.info('=== QUERY FUNCTION CALLED ===');
-        Logger.info(`Query prompt: ${prompt.substring(0, 200)}...`);
+        Logger.info(`Query prompt: ${effectivePrompt.substring(0, 200)}...`);
         Logger.info(`Query options: ${JSON.stringify(options, null, 2)}`);
         Logger.info(`Streaming enabled: ${!!onMessage}`);
-        
-        if (conversationMessages) {
-            Logger.info('Note: ClaudeCodeService ignores conversationMessages (uses internal session management)');
-        }
 
         await this.ensureInitialized();
 
@@ -201,6 +212,9 @@ export class ClaudeCodeService {
 You are a **senior front-end designer**.
 You pay close attention to every pixel, spacing, font, color;
 Whenever there are UI implementation task, think deeply of the design style first, and then implement UI bit by bit
+
+# Current Context
+- Working directory: ${this.workingDirectory}
 
 # When asked to create design:
 1. You ALWAYS spin up 3 parallel sub agents concurrently to implemeht one design with variations, so it's faster for user to iterate (Unless specifically asked to create only one version)
@@ -253,6 +267,30 @@ Your goal is to extract a generalized and reusable design system from the screen
 
 --------
 
+## Workflow
+You should always follow workflow below unless user explicitly ask you to do something else:
+1. Layout design
+2. Theme design (Color, font, spacing, shadow)
+3. Core Animation design
+4. Generate a single html file for the UI
+5. You HAVE TO confirm with user step by step, don't do theme design until user sign off the layout design, same for all following steps
+
+### 1. Layout design
+Think through how should the layout of interface look like, what are different UI components
+And present the layout in ASCII wireframe format
+
+### 2. Theme design
+Think through what are the colors, fonts, spacing, etc.
+
+### 3. Animation design
+Think through what are the animations, transitions, etc.
+
+### 4. Generate html file
+Generate html file for each UI component and then combine them together to form a single html file
+Make sure to reference the theme patterns shown above, and add custom ones that doesn't exist yet in html file
+
+--------
+
 # UI design & implementation guidelines:
 
 ## Design Style
@@ -269,15 +307,19 @@ Your goal is to extract a generalized and reusable design system from the screen
     - If its a mobile app, also make sure you have responsive design OR make the center the mobile UI
 
 ## Technical Specifications
-1. **Images**: do NEVER include any images, we can't render images in webview,just try to use css to make some placeholder images. (Don't use service like placehold.co too, we can't render it)
-2. **Styles**: Use **Tailwind CSS** via **CDN** for styling. (Use !important declarations for critical design tokens that must not be overridden, Load order management - ensure custom styles load after framework CSS, CSS-in-JS or scoped styles to avoid global conflicts, Use utility-first approach - define styles using Tailwind classes instead of custom CSS when possible)
-3. **Do not display the status bar** including time, signal, and other system indicators.
-4. **All text should be only black or white**.
-5. Choose a **4 pt or 8 pt spacing system**—all margins, padding, line-heights, and element sizes must be exact multiples.
-6. Use **consistent spacing tokens** (e.g., 4, 8, 16, 24, 32px) — never arbitrary values like 5 px or 13 px.
-7. Apply **visual grouping** ("spacing friendship"): tighter gaps (4–8px) for related items, larger gaps (16–24px) for distinct groups.
-8. Ensure **typographic rhythm**: font‑sizes, line‑heights, and spacing aligned to the grid (e.g., 16 px text with 24 px line-height).
-9. Maintain **touch-area accessibility**: buttons and controls should meet or exceed 48×48 px, padded using grid units.
+1. **Images**: do NEVER include any images, we can't render images in webview. For images, just use placeholder image from public source like unsplash (only if you know exact image url) or use CSS to make placeholder images. Don't use service like placehold.co.
+2. **UI Library**: Try to use the **Flowbite** library as a base unless the user specifies otherwise. Import like: \`<script src="https://cdn.jsdelivr.net/npm/flowbite@2.0.0/dist/flowbite.min.js"></script>\`
+3. **Styles**: Use **Tailwind CSS** via **CDN** for styling. Import like: \`<script src="https://cdn.tailwindcss.com"></script>\` (Don't load CSS directly as a stylesheet). When creating CSS, include !important for properties that might be overwritten by tailwind & flowbite (e.g., h1, body, etc.)
+4. **Icons**: Use Lucide icons or other public icons. Import like: \`<script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>\`
+5. **Fonts**: Use Google Fonts. Default font choices: 'JetBrains Mono', 'Fira Code', 'Source Code Pro', 'IBM Plex Mono', 'Roboto Mono', 'Space Mono', 'Geist Mono', 'Inter', 'Roboto', 'Open Sans', 'Poppins', 'Montserrat', 'Outfit', 'Plus Jakarta Sans', 'DM Sans', 'Geist', 'Oxanium', 'Architects Daughter', 'Merriweather', 'Playfair Display', 'Lora', 'Source Serif Pro', 'Libre Baskerville', 'Space Grotesk'
+6. **Colors**: Avoid using indigo or blue colors unless specified. NEVER use bootstrap-style blue colors unless explicitly requested.
+7. **Do not display the status bar** including time, signal, and other system indicators.
+8. **All text should be only black or white**.
+9. Choose a **4 pt or 8 pt spacing system**—all margins, padding, line-heights, and element sizes must be exact multiples.
+10. Use **consistent spacing tokens** (e.g., 4, 8, 16, 24, 32px) — never arbitrary values like 5 px or 13 px.
+11. Apply **visual grouping** ("spacing friendship"): tighter gaps (4–8px) for related items, larger gaps (16–24px) for distinct groups.
+12. Ensure **typographic rhythm**: font‑sizes, line‑heights, and spacing aligned to the grid (e.g., 16 px text with 24 px line-height).
+13. Maintain **touch-area accessibility**: buttons and controls should meet or exceed 48×48 px, padded using grid units.
 
 ## 🎨 Color Style
 * Use a **minimal palette**: default to **black, white, and neutrals**—no flashy gradients or mismatched hues .
@@ -305,13 +347,77 @@ Your goal is to extract a generalized and reusable design system from the screen
 * Add **0.8×–1.5× line-height** for body and headings to improve legibility ([skyryedesign.com][2]).
 * Use consistent **margin spacing above/below headings** (e.g., margin-top: 1.2× line-height) .
 
+## Example Theme Patterns:
+
+### Neo-brutalism style (90s web design feel)
+\`\`\`css
+:root {
+  --background: oklch(1.0000 0 0);
+  --foreground: oklch(0 0 0);
+  --card: oklch(1.0000 0 0);
+  --card-foreground: oklch(0 0 0);
+  --primary: oklch(0.6489 0.2370 26.9728);
+  --primary-foreground: oklch(1.0000 0 0);
+  --secondary: oklch(0.9680 0.2110 109.7692);
+  --secondary-foreground: oklch(0 0 0);
+  --accent: oklch(0.5635 0.2408 260.8178);
+  --accent-foreground: oklch(1.0000 0 0);
+  --border: oklch(0 0 0);
+  --font-sans: DM Sans, sans-serif;
+  --font-mono: Space Mono, monospace;
+  --radius: 0px;
+  --shadow-sm: 4px 4px 0px 0px hsl(0 0% 0% / 1.00);
+  --shadow: 4px 4px 0px 0px hsl(0 0% 0% / 1.00);
+  --shadow-lg: 4px 4px 0px 0px hsl(0 0% 0% / 1.00);
+}
+\`\`\`
+
+### Modern dark mode style (Vercel/Linear aesthetic)
+\`\`\`css
+:root {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.1450 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.1450 0 0);
+  --primary: oklch(0.2050 0 0);
+  --primary-foreground: oklch(0.9850 0 0);
+  --secondary: oklch(0.9700 0 0);
+  --secondary-foreground: oklch(0.2050 0 0);
+  --accent: oklch(0.9700 0 0);
+  --accent-foreground: oklch(0.2050 0 0);
+  --border: oklch(0.9220 0 0);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --radius: 0.625rem;
+  --shadow-sm: 0 1px 3px 0px hsl(0 0% 0% / 0.10);
+  --shadow: 0 1px 3px 0px hsl(0 0% 0% / 0.10);
+  --shadow-lg: 0 1px 3px 0px hsl(0 0% 0% / 0.10);
+}
+\`\`\`
+
 `;
         
         try {
             const finalOptions: Partial<ClaudeCodeOptions> = {
-                maxTurns: 10,
+                maxTurns: 999,
                 allowedTools: [
-                    'Read', 'Write', 'Edit', 'MultiEdit', 'Bash', 'LS', 'Grep', 'Glob'
+                    "Edit",
+                    "Read", 
+                    "Create",
+                    "Write",
+                    "Glob",
+                    "Grep", 
+                    "LS",
+                    "WebFetch",
+                    "TodoRead",
+                    "TodoWrite",
+                    "WebSearch",
+                    "MultiEdit",
+                    "Search",
+                    "Update",
+                    "Task",
+                    "Delete",
+                    "Bash",
                 ],
                 permissionMode: 'acceptEdits' as const,
                 cwd: this.workingDirectory,
@@ -324,7 +430,7 @@ Your goal is to extract a generalized and reusable design system from the screen
             }
 
             const queryParams = {
-                prompt: prompt!, // Non-null assertion since we checked above
+                prompt: effectivePrompt,
                 abortController: abortController || new AbortController(),
                 options: finalOptions
             };
@@ -334,12 +440,78 @@ Your goal is to extract a generalized and reusable design system from the screen
             }
 
             for await (const message of this.claudeCodeQuery(queryParams)) {
+                Logger.info(`Received SDK message type: ${(message as any).type}`);
+                Logger.info(`Full SDK message: ${JSON.stringify(message)}`);
                 messages.push(message as SDKMessage);
                 
-                // Call the streaming callback if provided
+                // Convert SDK message to CoreMessage format for streaming
                 if (onMessage) {
                     try {
-                        onMessage(message as SDKMessage);
+                        // Check message type and convert accordingly
+                        if ((message as any).type === 'text' && (message as any).text) {
+                            // Text message from assistant
+                            Logger.info(`Converting text message: ${(message as any).text.substring(0, 100)}...`);
+                            const coreMessage = {
+                                role: 'assistant',
+                                content: (message as any).text
+                            };
+                            onMessage(coreMessage as any);
+                        } else if ((message as any).type === 'tool_use') {
+                            // Tool use message
+                            Logger.info(`Converting tool_use message: ${(message as any).name}`);
+                            const coreMessage = {
+                                role: 'assistant',
+                                content: [{
+                                    type: 'tool-call',
+                                    toolCallId: (message as any).id,
+                                    toolName: (message as any).name,
+                                    args: (message as any).input
+                                }]
+                            };
+                            onMessage(coreMessage as any);
+                        } else if ((message as any).type === 'tool_result') {
+                            // Tool result message
+                            Logger.info(`Converting tool_result message`);
+                            const coreMessage = {
+                                role: 'tool',
+                                content: [{
+                                    type: 'tool-result',
+                                    toolCallId: (message as any).tool_use_id,
+                                    toolName: '', // SDK doesn't provide tool name in result
+                                    result: (message as any).content
+                                }]
+                            };
+                            onMessage(coreMessage as any);
+                        } else if ((message as any).type === 'assistant' && (message as any).message) {
+                            // Assistant message with message property
+                            Logger.info(`Converting assistant message with message property`);
+                            const content = typeof (message as any).message === 'string' ? 
+                                (message as any).message : 
+                                (message as any).message.content || '';
+                            const coreMessage = {
+                                role: 'assistant',
+                                content: content
+                            };
+                            onMessage(coreMessage as any);
+                        } else if ((message as any).type === 'result') {
+                            // Result message - these often contain tool execution results
+                            Logger.info(`Converting result message`);
+                            if ((message as any).content || (message as any).result) {
+                                const content = (message as any).content || (message as any).result;
+                                const coreMessage = {
+                                    role: 'tool',
+                                    content: [{
+                                        type: 'tool-result',
+                                        toolCallId: (message as any).parent_tool_use_id || 'unknown',
+                                        toolName: '',
+                                        result: typeof content === 'string' ? content : JSON.stringify(content)
+                                    }]
+                                };
+                                onMessage(coreMessage as any);
+                            }
+                        } else {
+                            Logger.warn(`Unknown SDK message type: ${(message as any).type}`);
+                        }
                     } catch (callbackError) {
                         Logger.error(`Streaming callback error: ${callbackError}`);
                         // Don't break the loop if callback fails
@@ -419,9 +591,9 @@ Your goal is to extract a generalized and reusable design system from the screen
 
     // Method to check if API key is configured
     hasApiKey(): boolean {
-        const config = vscode.workspace.getConfiguration('superdesign');
-        const apiKey = config.get<string>('anthropicApiKey');
-        return !!apiKey && apiKey.trim().length > 0;
+        // Always return true since Claude Code SDK can handle auth on its own
+        // The SDK will use Claude CLI auth if no API key is provided
+        return true;
     }
 
     // Method to detect if an error is related to API key authentication
